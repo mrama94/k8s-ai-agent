@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shop
+  namespace: demo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: shop
+  template:
+    metadata:
+      labels:
+        app: shop
+    spec:
+      containers:
+        - name: shop
+          image: nginx
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shop
+  namespace: demo
+spec:
+  selector:
+    app: shopp
+  ports:
+    - port: 80
+      targetPort: 80

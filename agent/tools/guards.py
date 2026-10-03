@@ -1,0 +1,39 @@
+import os
+
+from k8s_client import core
+
+ALLOWED_ACTIONS = {
+    "label_node", "delete_pod", "restart_deployment", "scale_deployment", "rollback_deployment",
+}
+ALLOWED_NAMESPACES = set(os.getenv("ALLOWED_NAMESPACES", "demo").split(","))
+ALLOWED_LABEL_KEYS = {"type"}
+MAX_ACTIONS = 3
+MAX_REPLICAS = 5
+
+
+class GuardError(Exception):
+    """Raised when an action is not allowed to run."""
+
+
+def check(action: dict) -> None:
+    """Deny by default: raise GuardError unless every rule passes."""
+    tool = action.get("tool")
+    args = action.get("args") or {}
+    if tool not in ALLOWED_ACTIONS:
+        raise GuardError(f"tool '{tool}' is not on the allowlist")
+    if tool != "label_node" and args.get("namespace") not in ALLOWED_NAMESPACES:
+        raise GuardError(f"namespace '{args.get('namespace')}' is not allowed")
+    if tool == "label_node":
+        if args.get("key") not in ALLOWED_LABEL_KEYS:
+            raise GuardError(f"label key '{args.get('key')}' is not allowed")
+        node = core.read_node(args.get("node", ""))
+        if "node-role.kubernetes.io/control-plane" in (node.metadata.labels or {}):
+            raise GuardError("control-plane nodes are off limits")
+    if tool == "scale_deployment":
+        replicas = args.get("replicas")
+        if not isinstance(replicas, int) or not 1 <= replicas <= MAX_REPLICAS:
+            raise GuardError(f"replicas must be an integer from 1 to {MAX_REPLICAS}")
+    if tool == "delete_pod":
+        pod = core.read_namespaced_pod(args.get("name", ""), args["namespace"])
+        if not pod.metadata.owner_references:
+            raise GuardError("pod has no controller, so deleting it would remove it permanently")

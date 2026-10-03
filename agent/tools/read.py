@@ -1,0 +1,283 @@
+import json
+
+from kubernetes.utils import parse_quantity
+from langchain_core.tools import tool
+
+from k8s_client import apps, core, custom, networking
+from tools.runbooks import search_runbooks
+
+MAX_CHARS = 4000
+REVISION = "deployment.kubernetes.io/revision"
+
+
+def _clip(text: str) -> str:
+    return text if len(text) <= MAX_CHARS else text[:MAX_CHARS] + "\n...[truncated]"
+
+
+def _j(obj) -> str:
+    """Compact JSON keeps tool output small, which matters for a 7B model's context."""
+    return _clip(json.dumps(obj, separators=(",", ":"), default=str))
+
+
+def _state(state) -> dict:
+    """Keep only the populated branch (waiting, terminated or running) of a container state."""
+    if state is None:
+        return {}
+    for kind in ("waiting", "terminated", "running"):
+        value = getattr(state, kind)
+        if value:
+            return {kind: {k: v for k, v in value.to_dict().items() if v}}
+    return {}
+
+
+@tool
+def list_nodes() -> str:
+    """List cluster nodes with their Ready status, labels and taints."""
+    out = []
+    for n in core.list_node().items:
+        ready = next((c.status for c in n.status.conditions if c.type == "Ready"), "Unknown")
+        out.append({
+            "name": n.metadata.name,
+            "ready": ready,
+            "labels": n.metadata.labels,
+            "taints": [f"{t.key}={t.value}:{t.effect}" for t in (n.spec.taints or [])],
+        })
+    return _clip(json.dumps(out, indent=2))
+
+
+@tool
+def list_pods(namespace: str = "default") -> str:
+    """List pods in a namespace with labels, phase, node and restart counts."""
+    out = []
+    for p in core.list_namespaced_pod(namespace).items:
+        statuses = p.status.container_statuses or []
+        out.append({
+            "name": p.metadata.name,
+            "labels": p.metadata.labels,
+            "phase": p.status.phase,
+            "node": p.spec.node_name,
+            "restarts": sum(s.restart_count for s in statuses),
+        })
+    return _j(out)
+
+
+@tool
+def describe_pod(namespace: str, name: str) -> str:
+    """Show a pod's labels, owner, nodeSelector, tolerations, resources, conditions and container states, including the last termination reason."""
+    p = core.read_namespaced_pod(name, namespace)
+    limits = {c.name: c.resources.to_dict() for c in p.spec.containers}
+    return _j({
+        "name": name,
+        "phase": p.status.phase,
+        "labels": p.metadata.labels,
+        "owner": [f"{o.kind}/{o.name}" for o in (p.metadata.owner_references or [])],
+        "node_selector": p.spec.node_selector,
+        "tolerations": [t.to_dict() for t in (p.spec.tolerations or [])],
+        "conditions": [
+            {"type": c.type, "status": c.status, "reason": c.reason, "message": c.message}
+            for c in (p.status.conditions or [])
+        ],
+        "containers": [
+            {
+                "name": s.name, "image": s.image, "ready": s.ready, "restarts": s.restart_count,
+                "state": _state(s.state), "last_state": _state(s.last_state),
+                "resources": limits.get(s.name),
+            }
+            for s in (p.status.container_statuses or [])
+        ],
+    })
+
+
+@tool
+def get_events(namespace: str, pod_name: str) -> str:
+    """Get recent events for a pod: scheduling failures, image pull errors, probe failures."""
+    events = core.list_namespaced_event(namespace, field_selector=f"involvedObject.name={pod_name}")
+    out = [{"type": e.type, "reason": e.reason, "message": e.message} for e in events.items]
+    return _clip(json.dumps(out[-10:], indent=2))
+
+
+@tool
+def get_pod_logs(namespace: str, name: str, tail_lines: int = 50) -> str:
+    """Get the last lines of a pod's logs."""
+    try:
+        return _clip(core.read_namespaced_pod_log(name, namespace, tail_lines=tail_lines))
+    except Exception as exc:  # a Pending pod has no logs yet
+        return f"could not read logs: {exc}"
+
+
+@tool
+def get_namespace_events(namespace: str) -> str:
+    """List the most recent Warning events across a namespace. Start here when you do not yet know which pod is affected."""
+    events = core.list_namespaced_event(namespace, field_selector="type=Warning").items
+    events.sort(key=lambda e: e.last_timestamp or e.event_time or e.metadata.creation_timestamp, reverse=True)
+    return _j([
+        {"object": f"{e.involved_object.kind}/{e.involved_object.name}", "reason": e.reason,
+         "message": e.message, "count": e.count}
+        for e in events[:15]
+    ])
+
+
+@tool
+def get_previous_logs(namespace: str, name: str, tail_lines: int = 50) -> str:
+    """Get logs from the previous, crashed instance of a pod's container. Use this for CrashLoopBackOff."""
+    try:
+        return _clip(core.read_namespaced_pod_log(name, namespace, previous=True, tail_lines=tail_lines))
+    except Exception as exc:
+        return f"no previous logs: {exc}"
+
+
+@tool
+def get_deployment(namespace: str, name: str) -> str:
+    """Show a Deployment's replica counts, images, conditions and rollout history (revisions with their images)."""
+    d = apps.read_namespaced_deployment(name, namespace)
+    owned = [
+        rs for rs in apps.list_namespaced_replica_set(namespace).items
+        if any(o.uid == d.metadata.uid for o in (rs.metadata.owner_references or []))
+    ]
+    revisions = sorted(
+        (
+            {
+                "revision": rs.metadata.annotations.get(REVISION),
+                "images": [c.image for c in rs.spec.template.spec.containers],
+                "replicas": rs.status.replicas,
+                "ready": rs.status.ready_replicas or 0,
+            }
+            for rs in owned
+        ),
+        key=lambda r: int(r["revision"] or 0),
+        reverse=True,
+    )
+    return _j({
+        "desired": d.spec.replicas,
+        "ready": d.status.ready_replicas or 0,
+        "updated": d.status.updated_replicas or 0,
+        "available": d.status.available_replicas or 0,
+        "strategy": d.spec.strategy.type,
+        "selector": d.spec.selector.match_labels,
+        "images": [c.image for c in d.spec.template.spec.containers],
+        "current_revision": d.metadata.annotations.get(REVISION),
+        "conditions": [
+            {"type": c.type, "status": c.status, "reason": c.reason, "message": c.message}
+            for c in (d.status.conditions or [])
+        ],
+        "revisions": revisions[:5],
+    })
+
+
+@tool
+def get_service(namespace: str, name: str) -> str:
+    """Show a Service's selector and ports, its endpoints (ready and not ready), and the pods its selector matches."""
+    svc = core.read_namespaced_service(name, namespace)
+    selector = svc.spec.selector or {}
+    matching = []
+    if selector:
+        label_selector = ",".join(f"{k}={v}" for k, v in selector.items())
+        matching = [
+            {"name": p.metadata.name, "phase": p.status.phase,
+             "ready": all(s.ready for s in (p.status.container_statuses or []))}
+            for p in core.list_namespaced_pod(namespace, label_selector=label_selector).items
+        ]
+    try:  # the Endpoints API is deprecated in newer Kubernetes but still served
+        ep = core.read_namespaced_endpoints(name, namespace)
+        ready = sum(len(s.addresses or []) for s in (ep.subsets or []))
+        not_ready = sum(len(s.not_ready_addresses or []) for s in (ep.subsets or []))
+    except Exception:
+        ready = not_ready = 0
+    return _j({
+        "type": svc.spec.type,
+        "selector": selector,
+        "ports": [{"port": p.port, "target_port": p.target_port} for p in svc.spec.ports],
+        "endpoints_ready": ready,
+        "endpoints_not_ready": not_ready,
+        "pods_matching_selector": matching,
+    })
+
+
+@tool
+def list_ingresses(namespace: str) -> str:
+    """List Ingress rules in a namespace: hosts, paths and the Service each path routes to."""
+    out = []
+    for ing in networking.list_namespaced_ingress(namespace).items:
+        for rule in (ing.spec.rules or []):
+            for path in (rule.http.paths if rule.http else []):
+                svc = path.backend.service
+                out.append({"ingress": ing.metadata.name, "host": rule.host, "path": path.path,
+                            "service": svc.name if svc else None,
+                            "port": (svc.port.number or svc.port.name) if svc and svc.port else None})
+    return _j(out)
+
+
+@tool
+def get_configmap_keys(namespace: str, name: str) -> str:
+    """List the keys in a ConfigMap and the size of each value. Values are never returned."""
+    cm = core.read_namespaced_config_map(name, namespace)
+    return _j({"keys_and_sizes": {k: len(v) for k, v in (cm.data or {}).items()},
+               "binary_keys": list((cm.binary_data or {}).keys())})
+
+
+@tool
+def list_pvcs(namespace: str) -> str:
+    """List PersistentVolumeClaims with phase, storage class, requested size and bound volume."""
+    return _j([
+        {"name": c.metadata.name, "phase": c.status.phase, "storage_class": c.spec.storage_class_name,
+         "requested": c.spec.resources.requests.get("storage"), "volume": c.spec.volume_name}
+        for c in core.list_namespaced_persistent_volume_claim(namespace).items
+    ])
+
+
+@tool
+def get_resource_quota(namespace: str) -> str:
+    """Show ResourceQuotas for a namespace: what is limited and how much is used."""
+    return _j([
+        {"name": q.metadata.name, "hard": q.status.hard, "used": q.status.used}
+        for q in core.list_namespaced_resource_quota(namespace).items
+    ])
+
+
+@tool
+def describe_node(name: str) -> str:
+    """Show a node's conditions, taints, allocatable resources, and how much CPU and memory pods request on it."""
+    n = core.read_node(name)
+    pods = core.list_pod_for_all_namespaces(field_selector=f"spec.nodeName={name}").items
+    cpu = mem = 0
+    for p in pods:
+        for c in p.spec.containers:
+            req = (c.resources.requests or {}) if c.resources else {}
+            cpu += parse_quantity(req.get("cpu", "0"))
+            mem += parse_quantity(req.get("memory", "0"))
+    alloc = n.status.allocatable
+    return _j({
+        "conditions": {c.type: c.status for c in n.status.conditions},
+        "taints": [f"{t.key}={t.value}:{t.effect}" for t in (n.spec.taints or [])],
+        "allocatable": {"cpu": alloc.get("cpu"), "memory": alloc.get("memory"), "pods": alloc.get("pods")},
+        "requested": {"cpu_cores": round(float(cpu), 2), "memory_gib": round(float(mem) / 2**30, 2)},
+        "pod_count": len(pods),
+    })
+
+
+@tool
+def get_metrics(namespace: str) -> str:
+    """Show live CPU (millicores) and memory (MiB) for nodes and for pods in a namespace. Needs metrics-server."""
+    try:
+        nodes = custom.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes")["items"]
+        pods = custom.list_namespaced_custom_object("metrics.k8s.io", "v1beta1", namespace, "pods")["items"]
+    except Exception as exc:
+        return f"metrics unavailable (is metrics-server installed?): {exc}"
+
+    def usage(u):
+        return {"cpu_m": round(float(parse_quantity(u["cpu"])) * 1000),
+                "mem_mib": round(float(parse_quantity(u["memory"])) / 2**20)}
+
+    return _j({
+        "nodes": {n["metadata"]["name"]: usage(n["usage"]) for n in nodes},
+        "pods": {p["metadata"]["name"]: [dict(name=c["name"], **usage(c["usage"])) for c in p["containers"]]
+                 for p in pods},
+    })
+
+
+READ_TOOLS = [
+    list_nodes, list_pods, describe_pod, get_events, get_pod_logs,
+    get_namespace_events, get_previous_logs, get_deployment, get_service,
+    describe_node, get_metrics, search_runbooks,
+]
+READ_TOOL_MAP = {t.name: t for t in READ_TOOLS}

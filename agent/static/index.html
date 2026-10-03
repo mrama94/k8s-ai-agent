@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang='en'>
+<head>
+<meta charset='utf-8'>
+<title>Local Kubernetes Agent</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
+  textarea { width: 100%; height: 5rem; box-sizing: border-box; }
+  pre { background: #f4f4f4; padding: .75rem; white-space: pre-wrap; border-radius: 6px; }
+  .bar { color: #555; font-size: .9rem; margin: .5rem 0 1rem; }
+  .blocked { color: #b00020; }
+  button { padding: .5rem 1rem; margin-right: .5rem; }
+</style>
+</head>
+<body>
+<h1>Kubernetes Agent (local)</h1>
+<div class='bar' id='usage'>tokens in/out: 0 / 0 | LLM time: 0 s | cost: $0.00</div>
+<textarea id='msg'>The pod web-service in namespace demo is stuck in Pending. Why, and how do I fix it?</textarea>
+<p><button id='send'>Investigate</button></p>
+<div id='out'></div>
+<script>
+const $ = (id) => document.getElementById(id);
+let threadId = null;
+
+function add(parent, tag, text, cls) {
+  const el = document.createElement(tag);
+  el.textContent = text;
+  if (cls) el.className = cls;
+  parent.appendChild(el);
+  return el;
+}
+
+async function post(path, body) {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+const bullets = (items) => (items.length ? '- ' + items.join('\n- ') : '(none)');
+
+function render(data) {
+  threadId = data.thread_id;
+  const u = data.usage;
+  $('usage').textContent = `tokens in/out: ${u.tokens_in} / ${u.tokens_out} | LLM time: ${u.llm_seconds.toFixed(1)} s | cost: $0.00`;
+  const out = $('out');
+  out.replaceChildren();
+  const d = data.diagnosis;
+  if (d) {
+    add(out, 'h3', `Diagnosis (confidence: ${d.confidence})`);
+    add(out, 'p', d.root_cause);
+    add(out, 'pre', `Evidence:\n${bullets(d.evidence)}\n\nRuled out:\n${bullets(d.ruled_out)}`);
+  }
+  if (data.history && data.history.length) {
+    add(out, 'h3', 'Earlier attempts');
+    add(out, 'pre', data.history.join('\n\n'));
+  }
+  if (data.plan) {
+    add(out, 'h3', 'Proposed plan');
+    add(out, 'p', data.plan.summary);
+    for (const a of data.plan.actions) {
+      const text = `${a.tool}(${JSON.stringify(a.args)})\n${a.reason}\nguard: ${a.guard}`;
+      add(out, 'pre', text, a.guard === 'allowed' ? '' : 'blocked');
+    }
+  }
+  if (data.status === 'awaiting_approval') {
+    const bar = add(out, 'p', '');
+    add(bar, 'button', 'Approve').onclick = () => decide(true);
+    add(bar, 'button', 'Reject').onclick = () => decide(false);
+  }
+  if (data.results && data.results.length) {
+    add(out, 'h3', 'Actions taken');
+    add(out, 'pre', data.results.join('\n'));
+  } else if (data.status === 'done') {
+    add(out, 'p', 'No changes were made to the cluster.');
+  }
+  if (data.verification) {
+    add(out, 'h3', `Verification (attempt ${data.attempts})`);
+    add(out, 'pre', `${data.verification.fixed ? 'FIXED' : 'NOT FIXED'}: ${data.verification.evidence}`);
+  }
+}
+
+async function guarded(fn, busyText) {
+  $('out').textContent = busyText;
+  try { render(await fn()); } catch (e) { $('out').textContent = String(e); }
+}
+
+const decide = (approved) =>
+  guarded(() => post('/api/approve', { thread_id: threadId, approved }), approved ? 'Applying the fix...' : 'Rejecting...');
+
+$('send').onclick = () => guarded(() => post('/api/chat', { message: $('msg').value }), 'Investigating...');
+</script>
+</body>
+</html>

@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k8s-agent
+  namespace: ai-agent
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: k8s-agent
+  template:
+    metadata:
+      labels:
+        app: k8s-agent
+    spec:
+      serviceAccountName: k8s-agent
+      securityContext:
+        fsGroup: 10001
+      containers:
+        - name: agent
+          image: k8s-agent:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: OLLAMA_BASE_URL
+              value: "http://host.docker.internal:11434"
+            - name: OLLAMA_MODEL
+              value: "qwen2.5:7b"
+            - name: ALLOWED_NAMESPACES
+              value: "demo"
+            - name: DB_PATH
+              value: "/data/agent.db"
+            - name: MAX_ATTEMPTS
+              value: "2"
+            - name: MAX_TOOL_ROUNDS
+              value: "12"
+            - name: OLLAMA_NUM_CTX
+              value: "16384"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 768Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: agent-data
