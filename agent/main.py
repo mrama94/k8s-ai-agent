@@ -1,4 +1,6 @@
 import os
+import sqlite3
+import time
 import uuid
 
 from fastapi import FastAPI, HTTPException
@@ -13,11 +15,23 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 USAGE_KEYS = ("tokens_in", "tokens_out", "llm_calls", "llm_seconds")
 
 app = FastAPI(title="Local Kubernetes Agent")
-graph = build_graph(os.getenv("DB_PATH", "/data/agent.db"))
+DB_PATH = os.getenv("DB_PATH", "/data/agent.db")
+MAX_CONTEXT_TURNS = 5  # earlier turns fed to the model, newest last
+graph = build_graph(DB_PATH)
+
+# One short summary per finished turn. Every turn runs as its own graph thread, so
+# usage totals and retry history stay per-turn; the conversation id links the turns.
+db = sqlite3.connect(DB_PATH, check_same_thread=False)
+db.execute(
+    "CREATE TABLE IF NOT EXISTS summaries "
+    "(thread_id TEXT PRIMARY KEY, conv_id TEXT, created REAL, summary TEXT)"
+)
+db.commit()
 
 
 class ChatRequest(BaseModel):
     message: str
+    conversation_id: str | None = None
 
 
 class ApprovalRequest(BaseModel):
@@ -29,13 +43,49 @@ def _config(thread_id: str) -> dict:
     return {"configurable": {"thread_id": thread_id}}
 
 
+def _context(conv_id: str) -> str:
+    rows = db.execute(
+        "SELECT summary FROM summaries WHERE conv_id = ? ORDER BY created DESC LIMIT ?",
+        (conv_id, MAX_CONTEXT_TURNS),
+    ).fetchall()
+    return "\n".join(f"{i}. {r[0]}" for i, r in enumerate(reversed(rows), 1))
+
+
+def _summarize(values: dict) -> str:
+    d = values.get("diagnosis") or {}
+    plan = values.get("plan") or {}
+    results = values.get("results") or []
+    verification = values.get("verification")
+    if results and verification:
+        outcome = f"applied {len(results)} action(s); {'fixed' if verification['fixed'] else 'not fixed'}"
+    elif results:
+        outcome = f"applied {len(results)} action(s)"
+    elif any(a.get("guard") == "allowed" for a in plan.get("actions", [])):
+        outcome = "plan rejected by the user, no changes made"
+    else:
+        outcome = "no change proposed"
+    root = d.get("root_cause", "no diagnosis")
+    return f"User asked: {values['request'][:200]} | Diagnosis ({d.get('confidence', '?')}): {root[:300]} | Outcome: {outcome}"[:700]
+
+
+def _remember(thread_id: str, values: dict) -> None:
+    db.execute(
+        "INSERT OR IGNORE INTO summaries VALUES (?, ?, ?, ?)",
+        (thread_id, values["conversation_id"], time.time(), _summarize(values)),
+    )
+    db.commit()
+
+
 def _snapshot(thread_id: str) -> dict:
     snap = graph.get_state(_config(thread_id))
     values = snap.values
+    if not snap.next and values.get("request"):
+        _remember(thread_id, values)
     usage = {k: values.get(k, 0) for k in USAGE_KEYS}
     usage["cost_usd"] = 0.0  # local model: nothing to pay
     return {
         "thread_id": thread_id,
+        "conversation_id": values.get("conversation_id"),
         "status": "awaiting_approval" if snap.next else "done",
         "diagnosis": values.get("diagnosis"),
         "plan": values.get("plan"),
@@ -50,7 +100,11 @@ def _snapshot(thread_id: str) -> dict:
 @app.post("/api/chat")
 def chat(req: ChatRequest):
     thread_id = str(uuid.uuid4())
-    graph.invoke({"request": req.message}, _config(thread_id))
+    conv_id = req.conversation_id or str(uuid.uuid4())
+    graph.invoke(
+        {"request": req.message, "conversation_id": conv_id, "context": _context(conv_id)},
+        _config(thread_id),
+    )
     return _snapshot(thread_id)
 
 

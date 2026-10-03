@@ -9,18 +9,21 @@
   pre { background: #f4f4f4; padding: .75rem; white-space: pre-wrap; border-radius: 6px; }
   .bar { color: #555; font-size: .9rem; margin: .5rem 0 1rem; }
   .blocked { color: #b00020; }
+  .turn { border-top: 1px solid #ddd; margin-top: 1rem; padding-top: .5rem; }
+  .user { font-weight: 600; white-space: pre-wrap; }
   button { padding: .5rem 1rem; margin-right: .5rem; }
 </style>
 </head>
 <body>
 <h1>Kubernetes Agent (local)</h1>
-<div class='bar' id='usage'>tokens in/out: 0 / 0 | LLM time: 0 s | cost: $0.00</div>
+<div class='bar' id='usage'>conversation tokens in/out: 0 / 0 | LLM time: 0 s | cost: $0.00</div>
 <textarea id='msg'>The pod web-service in namespace demo is stuck in Pending. Why, and how do I fix it?</textarea>
-<p><button id='send'>Investigate</button></p>
-<div id='out'></div>
+<p><button id='send'>Send</button><button id='reset'>New conversation</button></p>
+<div id='log'></div>
 <script>
 const $ = (id) => document.getElementById(id);
-let threadId = null;
+let conversationId = null;
+const total = { in: 0, out: 0, sec: 0 };
 
 function add(parent, tag, text, cls) {
   const el = document.createElement(tag);
@@ -42,11 +45,23 @@ async function post(path, body) {
 
 const bullets = (items) => (items.length ? '- ' + items.join('\n- ') : '(none)');
 
-function render(data) {
-  threadId = data.thread_id;
-  const u = data.usage;
-  $('usage').textContent = `tokens in/out: ${u.tokens_in} / ${u.tokens_out} | LLM time: ${u.llm_seconds.toFixed(1)} s | cost: $0.00`;
-  const out = $('out');
+const seen = {};  // thread_id -> usage already added to the running total
+
+function showUsage(data) {
+  const u = data.usage, prev = seen[data.thread_id] || { tokens_in: 0, tokens_out: 0, llm_seconds: 0 };
+  total.in += u.tokens_in - prev.tokens_in;
+  total.out += u.tokens_out - prev.tokens_out;
+  total.sec += u.llm_seconds - prev.llm_seconds;
+  seen[data.thread_id] = u;
+  $('usage').textContent = `conversation tokens in/out: ${total.in} / ${total.out} | LLM time: ${total.sec.toFixed(1)} s | cost: $0.00`;
+}
+
+function render(data, out) {
+  conversationId = data.conversation_id;
+  showUsage(data);
+  const threadId = data.thread_id;
+  const decide = (approved) =>
+    guarded(out, () => post('/api/approve', { thread_id: threadId, approved }), approved ? 'Applying the fix...' : 'Rejecting...');
   out.replaceChildren();
   const d = data.diagnosis;
   if (d) {
@@ -83,15 +98,27 @@ function render(data) {
   }
 }
 
-async function guarded(fn, busyText) {
-  $('out').textContent = busyText;
-  try { render(await fn()); } catch (e) { $('out').textContent = String(e); }
+async function guarded(out, fn, busyText) {
+  out.textContent = busyText;
+  try { render(await fn(), out); } catch (e) { out.textContent = String(e); }
 }
 
-const decide = (approved) =>
-  guarded(() => post('/api/approve', { thread_id: threadId, approved }), approved ? 'Applying the fix...' : 'Rejecting...');
+$('send').onclick = () => {
+  const message = $('msg').value.trim();
+  if (!message) return;
+  const turn = add($('log'), 'div', '', 'turn');
+  add(turn, 'p', message, 'user');
+  const out = add(turn, 'div', '');
+  $('msg').value = '';
+  guarded(out, () => post('/api/chat', { message, conversation_id: conversationId }), 'Investigating...');
+};
 
-$('send').onclick = () => guarded(() => post('/api/chat', { message: $('msg').value }), 'Investigating...');
+$('reset').onclick = () => {
+  conversationId = null;
+  total.in = total.out = total.sec = 0;
+  $('log').replaceChildren();
+  $('usage').textContent = 'conversation tokens in/out: 0 / 0 | LLM time: 0 s | cost: $0.00';
+};
 </script>
 </body>
 </html>

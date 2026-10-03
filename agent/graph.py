@@ -91,6 +91,8 @@ class Verdict(BaseModel):
 
 class AgentState(TypedDict, total=False):
     request: str
+    conversation_id: str
+    context: str
     findings: str
     diagnosis: dict
     plan: dict
@@ -164,8 +166,14 @@ def _investigate(system_prompt: str, user_text: str) -> tuple[str, dict]:
     return ai.content or "No notes produced.", totals
 
 
+def _with_context(state: AgentState, text: str) -> str:
+    if not state.get("context"):
+        return text
+    return f"Earlier in this conversation (background only, the cluster may have changed since):\n{state['context']}\n\n{text}"
+
+
 def investigate(state: AgentState) -> dict:
-    brief = state["request"]
+    brief = _with_context(state, state["request"])
     if state.get("history"):
         brief += "\n\nEarlier attempts (do not repeat a fix that failed):\n" + "\n".join(state["history"])
     notes, totals = _investigate(INVESTIGATE_PROMPT, brief)
@@ -189,7 +197,7 @@ def propose(state: AgentState) -> dict:
     parsed, totals = _structured(
         Plan,
         PLAN_PROMPT,
-        f"Request: {state['request']}\n\nDiagnosis: {diagnosis['root_cause']}\n"
+        _with_context(state, f"Request: {state['request']}") + f"\n\nDiagnosis: {diagnosis['root_cause']}\n"
         f"Evidence: {diagnosis['evidence']}\n\nEarlier attempts:\n{history}",
     )
     if parsed is None:
