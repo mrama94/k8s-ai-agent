@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import threading
 import time
 import uuid
 
@@ -27,6 +28,11 @@ db.execute(
     "(thread_id TEXT PRIMARY KEY, conv_id TEXT, created REAL, summary TEXT)"
 )
 db.commit()
+db_lock = threading.Lock()
+
+# In-memory job table: graph runs happen in background threads so no HTTP request stays open
+# for minutes (kubectl port-forward drops long connections). The page polls /api/status.
+jobs: dict[str, dict] = {}
 
 
 class ChatRequest(BaseModel):
@@ -44,10 +50,11 @@ def _config(thread_id: str) -> dict:
 
 
 def _context(conv_id: str) -> str:
-    rows = db.execute(
-        "SELECT summary FROM summaries WHERE conv_id = ? ORDER BY created DESC LIMIT ?",
-        (conv_id, MAX_CONTEXT_TURNS),
-    ).fetchall()
+    with db_lock:
+        rows = db.execute(
+            "SELECT summary FROM summaries WHERE conv_id = ? ORDER BY created DESC LIMIT ?",
+            (conv_id, MAX_CONTEXT_TURNS),
+        ).fetchall()
     return "\n".join(f"{i}. {r[0]}" for i, r in enumerate(reversed(rows), 1))
 
 
@@ -69,24 +76,39 @@ def _summarize(values: dict) -> str:
 
 
 def _remember(thread_id: str, values: dict) -> None:
-    db.execute(
-        "INSERT OR IGNORE INTO summaries VALUES (?, ?, ?, ?)",
-        (thread_id, values["conversation_id"], time.time(), _summarize(values)),
-    )
-    db.commit()
+    with db_lock:
+        db.execute(
+            "INSERT OR IGNORE INTO summaries VALUES (?, ?, ?, ?)",
+            (thread_id, values["conversation_id"], time.time(), _summarize(values)),
+        )
+        db.commit()
 
 
 def _snapshot(thread_id: str) -> dict:
     snap = graph.get_state(_config(thread_id))
     values = snap.values
-    if not snap.next and values.get("request"):
-        _remember(thread_id, values)
+    job = jobs.get(thread_id, {})
+    if job.get("running"):
+        status = "running"
+    elif job.get("error"):
+        status = "error"
+    elif "human_approval" in snap.next:
+        status = "awaiting_approval"
+    elif snap.next:
+        status = "interrupted"  # the server restarted mid-run
+    else:
+        status = "done"
+        if values.get("request"):
+            _remember(thread_id, values)
     usage = {k: values.get(k, 0) for k in USAGE_KEYS}
     usage["cost_usd"] = 0.0  # local model: nothing to pay
     return {
         "thread_id": thread_id,
         "conversation_id": values.get("conversation_id"),
-        "status": "awaiting_approval" if snap.next else "done",
+        "status": status,
+        "error": job.get("error"),
+        "steps": job.get("steps", []),
+        "elapsed": round((job.get("finished") or time.time()) - job["started"], 1) if job else 0,
         "diagnosis": values.get("diagnosis"),
         "plan": values.get("plan"),
         "results": values.get("results", []),
@@ -97,24 +119,48 @@ def _snapshot(thread_id: str) -> dict:
     }
 
 
+def _run(thread_id: str, graph_input) -> None:
+    """Run (or resume) the graph to its next pause or end, recording progress."""
+    job = jobs[thread_id]
+    try:
+        for update in graph.stream(graph_input, _config(thread_id), stream_mode="updates"):
+            job["steps"].extend(k for k in update if not k.startswith("__"))
+    except Exception as exc:
+        job["error"] = f"{type(exc).__name__}: {exc}"[:500]
+    finally:
+        job["running"] = False
+        job["finished"] = time.time()
+
+
+def _start(thread_id: str, graph_input) -> None:
+    jobs[thread_id] = {"running": True, "steps": [], "started": time.time()}
+    threading.Thread(target=_run, args=(thread_id, graph_input), daemon=True).start()
+
+
 @app.post("/api/chat")
 def chat(req: ChatRequest):
     thread_id = str(uuid.uuid4())
     conv_id = req.conversation_id or str(uuid.uuid4())
-    graph.invoke(
-        {"request": req.message, "conversation_id": conv_id, "context": _context(conv_id)},
-        _config(thread_id),
-    )
-    return _snapshot(thread_id)
+    _start(thread_id, {"request": req.message, "conversation_id": conv_id, "context": _context(conv_id)})
+    return {"thread_id": thread_id, "conversation_id": conv_id, "status": "running"}
 
 
 @app.post("/api/approve")
 def approve(req: ApprovalRequest):
     config = _config(req.thread_id)
-    if not graph.get_state(config).next:
+    if jobs.get(req.thread_id, {}).get("running"):
+        raise HTTPException(status_code=409, detail="This thread is already running.")
+    if "human_approval" not in graph.get_state(config).next:
         raise HTTPException(status_code=409, detail="Nothing is waiting for approval on this thread.")
-    graph.invoke(Command(resume={"approved": req.approved}), config)
-    return _snapshot(req.thread_id)
+    _start(req.thread_id, Command(resume={"approved": req.approved}))
+    return {"thread_id": req.thread_id, "status": "running"}
+
+
+@app.get("/api/status/{thread_id}")
+def status(thread_id: str):
+    if not graph.get_state(_config(thread_id)).values and thread_id not in jobs:
+        raise HTTPException(status_code=404, detail="Unknown thread.")
+    return _snapshot(thread_id)
 
 
 @app.get("/healthz")

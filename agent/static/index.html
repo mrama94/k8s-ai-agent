@@ -98,9 +98,38 @@ function render(data, out) {
   }
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const STEP_LABELS = { investigate: 'investigated', propose: 'planned', human_approval: 'approval', apply_fix: 'applied fix', verify_fix: 'verified' };
+
+// Start a background run, then poll its status until it pauses or finishes.
 async function guarded(out, fn, busyText) {
   out.textContent = busyText;
-  try { render(await fn(), out); } catch (e) { out.textContent = String(e); }
+  let failures = 0;
+  try {
+    const { thread_id } = await fn();
+    for (;;) {
+      await sleep(2000);
+      let data;
+      try {
+        const res = await fetch(`/api/status/${thread_id}`);
+        if (!res.ok) throw new Error(await res.text());
+        data = await res.json();
+        failures = 0;
+      } catch (e) {
+        if (++failures >= 15) throw e;  // tolerate brief port-forward drops
+        continue;
+      }
+      if (data.status === 'running') {
+        const done = data.steps.map((s) => STEP_LABELS[s] || s).join(' > ');
+        out.textContent = `${busyText} (${Math.round(data.elapsed)} s${done ? ', ' + done : ''})`;
+        continue;
+      }
+      if (data.status === 'error') throw new Error(data.error);
+      if (data.status === 'interrupted') throw new Error('The agent restarted during this run. Send the request again.');
+      render(data, out);
+      return;
+    }
+  } catch (e) { out.textContent = String(e); }
 }
 
 $('send').onclick = () => {

@@ -10,7 +10,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 
-from k8s_client import core
+from k8s_client import apps, core
 from llm import get_llm
 from tools import guards
 from tools.read import READ_TOOL_MAP, READ_TOOLS
@@ -57,14 +57,6 @@ Common fixes:
 Use the exact names from the cluster facts below. Use as few actions as possible and do not repeat a fix that already failed.
 If no allowed action can fix the problem, return an empty actions list and say why in the summary."""
 
-VERIFY_PROMPT = """You verify a Kubernetes fix. Use the read-only tools to check the live cluster.
-Finish with plain notes on whether the original problem is resolved, with evidence."""
-
-VERDICT_PROMPT = (
-    "Decide from the notes whether the original problem is fixed. "
-    "Be strict: pods that are still Pending, crashing or not ready mean it is not fixed."
-)
-
 
 class Diagnosis(BaseModel):
     root_cause: str = Field(description="The most likely root cause in one or two sentences")
@@ -94,11 +86,6 @@ class Plan(BaseModel):
     actions: list[Action]
 
 
-class Verdict(BaseModel):
-    fixed: bool
-    evidence: str = Field(description="What the live cluster shows now")
-
-
 class AgentState(TypedDict, total=False):
     request: str
     conversation_id: str
@@ -122,9 +109,17 @@ def _merge(into: dict, other: dict) -> None:
         into[key] += value
 
 
+def _invoke(llm, messages):
+    """One retry: a stalled or dropped Ollama call otherwise fails the whole run."""
+    try:
+        return llm.invoke(messages)
+    except Exception:
+        return llm.invoke(messages)
+
+
 def _call(llm, messages: list, totals: dict):
     started = time.monotonic()
-    ai = llm.invoke(messages)
+    ai = _invoke(llm, messages)
     add(totals, ai, started)
     messages.append(ai)
     return ai
@@ -135,7 +130,7 @@ def _structured(schema, system_prompt: str, user_text: str):
     llm = get_llm().with_structured_output(schema, include_raw=True)
     totals = new_totals()
     started = time.monotonic()
-    result = llm.invoke([SystemMessage(system_prompt), HumanMessage(user_text)])
+    result = _invoke(llm, [SystemMessage(system_prompt), HumanMessage(user_text)])
     add(totals, result["raw"], started)
     return result["parsed"], totals
 
@@ -252,18 +247,65 @@ def apply_fix(state: AgentState) -> dict:
     return {"results": results, "attempts": attempt}
 
 
+VERIFY_TIMEOUT = int(os.getenv("VERIFY_TIMEOUT", "90"))  # seconds to wait for the cluster to settle
+VERIFY_POLL = 5
+
+
+def _cluster_health(actions: list[dict]) -> tuple[bool, str]:
+    """Read the cluster directly. Returns (healthy, facts). Plain code, so no model can misjudge it."""
+    facts, healthy = [], True
+    namespaces = set(guards.ALLOWED_NAMESPACES) | {
+        a["args"]["namespace"] for a in actions if a.get("args", {}).get("namespace")
+    }
+    for ns in sorted(namespaces):
+        try:
+            for p in core.list_namespaced_pod(ns).items:
+                if p.metadata.deletion_timestamp:
+                    continue  # still terminating, a replacement is on its way
+                cs = p.status.container_statuses or []
+                ready = bool(cs) and all(c.ready for c in cs)
+                waiting = [c.state.waiting.reason for c in cs if c.state and c.state.waiting]
+                if p.status.phase != "Running" or not ready:
+                    healthy = False
+                facts.append(f"pod {ns}/{p.metadata.name}: phase={p.status.phase} ready={ready}"
+                             + (f" waiting={waiting}" if waiting else ""))
+            for d in apps.list_namespaced_deployment(ns).items:
+                ok = (d.status.ready_replicas or 0) == (d.spec.replicas or 0)
+                healthy = healthy and ok
+                facts.append(f"deployment {ns}/{d.metadata.name}: desired={d.spec.replicas} "
+                             f"ready={d.status.ready_replicas or 0}")
+        except Exception as exc:
+            healthy = False
+            facts.append(f"namespace {ns}: could not read ({exc})")
+    for a in actions:
+        if a.get("tool") == "label_node":
+            try:
+                facts.append(f"node {a['args']['node']} labels: {core.read_node(a['args']['node']).metadata.labels}")
+            except Exception as exc:
+                healthy = False
+                facts.append(f"node {a['args'].get('node')}: could not read ({exc})")
+    return healthy, "\n".join(facts) or "no facts available"
+
+
 def verify_fix(state: AgentState) -> dict:
-    time.sleep(10)  # let rollouts and the scheduler react
+    """Deterministic verification: wait for the cluster to settle, then judge from live state."""
     attempt = state["attempts"]
     these = [r for r in state["results"] if r.startswith(f"[attempt {attempt}]")]
-    report = f"Original request: {state['request']}\n\nActions taken:\n" + "\n".join(these)
-    notes, totals = _investigate(VERIFY_PROMPT, report)
-    parsed, extra = _structured(Verdict, VERDICT_PROMPT, notes)
-    _merge(totals, extra)
-    verdict = parsed.model_dump() if parsed else {"fixed": False, "evidence": notes[:500]}
-    outcome = "fixed" if verdict["fixed"] else "not fixed: " + verdict["evidence"]
+    actions = [a for a in state["plan"]["actions"] if a.get("guard") == "allowed"]
+    failed = [r for r in these if "FAILED" in r or "BLOCKED" in r]
+    deadline = time.monotonic() + VERIFY_TIMEOUT
+    time.sleep(VERIFY_POLL)
+    while True:
+        healthy, facts = _cluster_health(actions)
+        if healthy or failed or time.monotonic() >= deadline:
+            break
+        time.sleep(VERIFY_POLL)
+    fixed = healthy and not failed
+    evidence = ("An action failed: " + "; ".join(failed) + "\n" if failed else "") + "Live cluster state:\n" + facts
+    verdict = {"fixed": fixed, "evidence": evidence}
+    outcome = "fixed" if fixed else "not fixed: " + evidence
     summary = f"Attempt {attempt}: root cause '{state['diagnosis']['root_cause']}'; actions {these}; outcome {outcome}"
-    return {"verification": verdict, "history": [summary], **totals}
+    return {"verification": verdict, "history": [summary]}
 
 
 def route_after_verify(state: AgentState) -> str:
