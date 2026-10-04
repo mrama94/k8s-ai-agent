@@ -8,4 +8,5 @@ except config.ConfigException:
 core = client.CoreV1Api()
 apps = client.AppsV1Api()
 networking = client.NetworkingV1Api()
+batch = client.BatchV1Api()
 custom = client.CustomObjectsApi()

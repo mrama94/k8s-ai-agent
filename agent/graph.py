@@ -1,18 +1,20 @@
 import operator
 import os
+import re
 import sqlite3
 import time
 from typing import Annotated, Literal, TypedDict
 
+from kubernetes import client
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 
-from k8s_client import apps, core
+from k8s_client import apps, batch, core
 from llm import get_llm
-from tools import guards
+from tools import guards, patching
 from tools.read import READ_TOOL_MAP, READ_TOOLS
 from tools.write import execute
 from usage_tracker import add, new_totals
@@ -54,15 +56,28 @@ Allowed actions:
 - restart_deployment: args namespace, name. Rolling restart.
 - scale_deployment: args namespace, name, replicas (integer).
 - rollback_deployment: args namespace, name. Returns to the previous revision.
+- patch_resource: args kind, namespace, name, patch. Edits one existing object. kind is one of Deployment,
+  StatefulSet, DaemonSet, Job, CronJob, Service, ConfigMap. patch is a JSON STRING (a strategic merge patch) that
+  contains only the fields to change. Examples:
+    wrong Service selector:   {"spec": {"selector": {"app": "shop"}}}
+    wrong Service port:       {"spec": {"ports": [{"port": 80, "targetPort": 8080}]}}
+    wrong image:              {"spec": {"template": {"spec": {"containers": [{"name": "web", "image": "nginx:1.27"}]}}}}
+    memory limit too low:     {"spec": {"template": {"spec": {"containers": [{"name": "web", "resources": {"limits": {"memory": "256Mi"}}}]}}}}
+    wrong env value:          {"spec": {"template": {"spec": {"containers": [{"name": "web", "env": [{"name": "MODE", "value": "ok"}]}]}}}}
+    wrong probe path or port: {"spec": {"template": {"spec": {"containers": [{"name": "web", "readinessProbe": {"httpGet": {"path": "/healthz", "port": 8080}}}]}}}}
+    wrong ConfigMap value:    {"data": {"MODE": "ok"}}
+    suspended CronJob:        {"spec": {"suspend": false}}
+  Always name the container by its exact name. Change only what the diagnosis shows is wrong.
+- delete_resource: args kind, namespace, name. Deletes a Job, CronJob, Service or ConfigMap.
 Common fixes:
 - Pod Pending because its nodeSelector (key=value) matches no node: label_node on a WORKER node with that exact key and value.
   Never label the control-plane node, and never delete a pod that has no controller.
 - Rollout broken by a bad image: rollback_deployment.
 - One bad replica: delete_pod. Stale config in running pods: restart_deployment. Scaled down by mistake: scale_deployment.
 Only propose an action that directly fixes the diagnosed cause. These causes have NO fix among the actions, so
-return an empty actions list for them: a wrong Service or Ingress selector or port, wrong ConfigMap or Secret
-contents, a memory or CPU limit that is too low, a missing image or registry credentials with no earlier revision,
-not enough cluster capacity, an application error inside the container.
+return an empty actions list for them: anything about Secrets, Ingresses, PersistentVolumeClaims or RBAC, missing
+registry credentials, not enough cluster capacity, a cause that lives in application code or an external system
+(for example a database that is down).
 Never use rollback_deployment unless a new revision introduced the problem. Never use label_node unless a pod's
 nodeSelector names a label that no node has.
 Use the exact names from the cluster facts below. Use as few actions as possible and do not repeat a fix that already failed.
@@ -78,16 +93,18 @@ class Diagnosis(BaseModel):
 
 class ActionArgs(BaseModel):
     """Typed arguments, so the model sees every allowed key name instead of a free-form dict."""
-    namespace: str | None = None
-    name: str | None = None
-    node: str | None = None
-    key: str | None = None
-    value: str | None = None
-    replicas: int | None = None
+    namespace: str | None = Field(default=None, description="Namespace of the object")
+    name: str | None = Field(default=None, description="Exact name of the object to change (every action except label_node needs it)")
+    node: str | None = Field(default=None, description="Node name (label_node)")
+    key: str | None = Field(default=None, description="Label key (label_node)")
+    value: str | None = Field(default=None, description="Label value (label_node)")
+    replicas: int | None = Field(default=None, description="Replica count (scale_deployment)")
+    kind: str | None = Field(default=None, description="Deployment, StatefulSet, DaemonSet, Job, CronJob, Service or ConfigMap (patch_resource, delete_resource)")
+    patch: str | None = Field(default=None, description="JSON string with only the fields to change (patch_resource)")
 
 
 class Action(BaseModel):
-    tool: str = Field(description="One of: label_node, delete_pod, restart_deployment, scale_deployment, rollback_deployment")
+    tool: str = Field(description="One of: label_node, delete_pod, restart_deployment, scale_deployment, rollback_deployment, patch_resource, delete_resource")
     args: ActionArgs = Field(description="Arguments for the tool. Set only the fields that tool needs")
     reason: str = Field(description="One sentence on why this action fixes the problem")
 
@@ -212,19 +229,111 @@ def _node_facts() -> str:
     return "\n".join(lines)
 
 
+REQUIRED_ARGS = {
+    "label_node": ("node", "key", "value"),
+    "delete_pod": ("namespace", "name"),
+    "restart_deployment": ("namespace", "name"),
+    "rollback_deployment": ("namespace", "name"),
+    "scale_deployment": ("namespace", "name", "replicas"),
+    "patch_resource": ("kind", "namespace", "name", "patch"),
+    "delete_resource": ("kind", "namespace", "name"),
+}
+
+
+def _missing_args(plan, text: str = "") -> list[str]:
+    """Default the namespace when only one is allowed; list what is still missing, per action."""
+    if plan is None:
+        return []
+    only = next(iter(guards.ALLOWED_NAMESPACES)) if len(guards.ALLOWED_NAMESPACES) == 1 else None
+    out = []
+    for action in plan.actions:
+        if action.args.namespace is None and only and action.tool != "label_node":
+            action.args.namespace = only
+        _infer_name(action, text)
+        gaps = [f for f in REQUIRED_ARGS.get(action.tool, ()) if getattr(action.args, f) in (None, "")]
+        if gaps:
+            out.append(f"{action.tool} lacks {', '.join(gaps)}")
+    return out
+
+
+def _objects(ns: str) -> list[tuple]:
+    """Objects the agent may fix in a namespace: (kind, name, container names or None, has a controller)."""
+    def containers(spec):
+        return ", ".join(c.name for c in spec.template.spec.containers)
+    out = []
+    for d in apps.list_namespaced_deployment(ns).items:
+        out.append(("Deployment", d.metadata.name, containers(d.spec), True))
+    for d in apps.list_namespaced_stateful_set(ns).items:
+        out.append(("StatefulSet", d.metadata.name, containers(d.spec), True))
+    for d in apps.list_namespaced_daemon_set(ns).items:
+        out.append(("DaemonSet", d.metadata.name, containers(d.spec), True))
+    for j in batch.list_namespaced_job(ns).items:
+        out.append(("Job", j.metadata.name, None, True))
+    for j in batch.list_namespaced_cron_job(ns).items:
+        out.append(("CronJob", j.metadata.name, containers(j.spec.job_template.spec), True))
+    for sv in core.list_namespaced_service(ns).items:
+        out.append(("Service", sv.metadata.name, None, True))
+    for cm in core.list_namespaced_config_map(ns).items:
+        if cm.metadata.name != "kube-root-ca.crt":
+            out.append(("ConfigMap", cm.metadata.name, None, True))
+    for p in core.list_namespaced_pod(ns).items:
+        out.append(("Pod", p.metadata.name, None, bool(p.metadata.owner_references)))
+    return out
+
+
+def _object_facts() -> str:
+    """Real object names (and container names), so the model copies them instead of guessing or omitting them."""
+    lines = []
+    for ns in sorted(guards.ALLOWED_NAMESPACES):
+        try:
+            for kind, name, containers, controlled in _objects(ns):
+                lines.append(f"- {kind} {ns}/{name}" + (f" (containers: {containers})" if containers else "")
+                             + ("" if controlled else " (no controller)"))
+        except Exception as exc:
+            lines.append(f"- namespace {ns}: could not list ({exc})")
+    return "\n".join(lines) or "(none)"
+
+
+def _infer_name(action, text: str) -> None:
+    """The model often leaves out `name`. Fill it only when the answer is unambiguous."""
+    a = action.args
+    if action.tool not in ("patch_resource", "delete_resource") or a.name or not a.kind or not a.namespace:
+        return
+    try:
+        names = [n for k, n, _, _ in _objects(a.namespace) if k == a.kind]
+    except Exception:
+        return
+    mentioned = [n for n in names if re.search(rf"(?<![\w-]){re.escape(n)}(?![\w-])", text)]
+    if len(mentioned) == 1:
+        a.name = mentioned[0]
+    elif len(names) == 1:
+        a.name = names[0]
+
+
 def propose(state: AgentState) -> dict:
     diagnosis = state["diagnosis"]
     if diagnosis["confidence"] == "low":
         summary = "Confidence is too low to propose a change. Review the evidence and investigate further."
         return {"plan": {"summary": summary, "actions": []}}
     history = "\n".join(state.get("history", [])) or "none"
-    parsed, totals = _structured(
-        Plan,
-        PLAN_PROMPT,
+    prompt = (
         _with_context(state, f"Request: {state['request']}") + f"\n\nDiagnosis: {diagnosis['root_cause']}\n"
         f"Evidence: {diagnosis['evidence']}\n\nInvestigation notes:\n{state.get('findings', '')[:3000]}\n\n"
-        f"Cluster nodes:\n{_node_facts()}\n\nEarlier attempts:\n{history}",
+        f"Cluster nodes:\n{_node_facts()}\n\nObjects in the allowed namespaces (copy names from here):\n{_object_facts()}"
+        f"\n\nEarlier attempts:\n{history}"
     )
+    parsed, totals = _structured(Plan, PLAN_PROMPT, prompt)
+    evidence_text = f"{state['request']} {diagnosis['root_cause']}"
+    missing = _missing_args(parsed, evidence_text)
+    if missing:  # a small model often forgets required fields: ask once, naming exactly what is missing
+        again, extra = _structured(
+            Plan, PLAN_PROMPT,
+            prompt + f"\n\nYour previous plan was incomplete: {missing}. Return the whole plan again with every "
+            "required argument set (kind, namespace, name, patch and so on, as listed for each action).",
+        )
+        _merge(totals, extra)
+        parsed = again or parsed
+        _missing_args(parsed, evidence_text)  # apply the defaults to the new plan too
     if parsed is None:
         plan = {"summary": "The model did not return a valid plan.", "actions": []}
     else:
@@ -234,8 +343,13 @@ def propose(state: AgentState) -> dict:
             try:
                 guards.check(action)
                 action["guard"] = "allowed"
+                if action["tool"] == "patch_resource":  # show exactly what would change before the human decides
+                    args = action["args"]
+                    action["preview"] = patching.preview(
+                        args["kind"], args["namespace"], args["name"], patching.parse_patch(args.get("patch")))
             except Exception as exc:
                 action["guard"] = f"blocked: {exc}"
+                action.pop("preview", None)
     return {"plan": plan, **totals}
 
 
@@ -285,6 +399,31 @@ def _cluster_health(actions: list[dict]) -> tuple[bool, str]:
                 healthy = healthy and ok
                 facts.append(f"deployment {ns}/{d.metadata.name}: desired={d.spec.replicas} "
                              f"ready={d.status.ready_replicas or 0}")
+            for st in apps.list_namespaced_stateful_set(ns).items:
+                ok = (st.status.ready_replicas or 0) == (st.spec.replicas or 0)
+                healthy = healthy and ok
+                facts.append(f"statefulset {ns}/{st.metadata.name}: desired={st.spec.replicas} "
+                             f"ready={st.status.ready_replicas or 0}")
+            for ds in apps.list_namespaced_daemon_set(ns).items:
+                ok = (ds.status.number_ready or 0) == (ds.status.desired_number_scheduled or 0)
+                healthy = healthy and ok
+                facts.append(f"daemonset {ns}/{ds.metadata.name}: desired={ds.status.desired_number_scheduled} "
+                             f"ready={ds.status.number_ready or 0}")
+            for job in batch.list_namespaced_job(ns).items:
+                failed = (job.status.failed or 0) > 0 and not (job.status.succeeded or 0) and not job.status.active
+                healthy = healthy and not failed
+                facts.append(f"job {ns}/{job.metadata.name}: active={job.status.active or 0} "
+                             f"succeeded={job.status.succeeded or 0} failed={job.status.failed or 0}")
+            for svc in core.list_namespaced_service(ns).items:
+                if not svc.spec.selector:
+                    continue
+                try:
+                    ep = core.read_namespaced_endpoints(svc.metadata.name, ns)
+                    ready_addrs = sum(len(x.addresses or []) for x in (ep.subsets or []))
+                except client.ApiException:
+                    ready_addrs = 0
+                healthy = healthy and ready_addrs > 0
+                facts.append(f"service {ns}/{svc.metadata.name}: ready endpoints={ready_addrs}")
         except Exception as exc:
             healthy = False
             facts.append(f"namespace {ns}: could not read ({exc})")

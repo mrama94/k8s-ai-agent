@@ -9,7 +9,7 @@ from kubernetes import client
 from kubernetes.utils import parse_quantity
 from langchain_core.tools import tool
 
-from k8s_client import apps, core, custom, networking
+from k8s_client import apps, batch, core, custom, networking
 from tools.runbooks import search_runbooks
 
 MAX_CHARS = 4000
@@ -380,9 +380,34 @@ def search_logs(namespace: str, pod_prefix: str = "", text: str = "", minutes: i
     return _loki_lines(namespace, pod_prefix, text, minutes)
 
 
+@tool
+def get_object(kind: Literal["Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "Service", "ConfigMap"],
+               namespace: str, name: str) -> str:
+    """Show one object's spec and status: Deployment (with rollout history), StatefulSet, DaemonSet, Job, CronJob, Service (with endpoints) or ConfigMap (with its values). Use it to find the exact wrong field before proposing a fix."""
+    if kind == "Deployment":
+        return get_deployment.invoke({"namespace": namespace, "name": name})
+    if kind == "Service":
+        return get_service.invoke({"namespace": namespace, "name": name})
+    readers = {
+        "StatefulSet": lambda: apps.read_namespaced_stateful_set(name, namespace),
+        "DaemonSet": lambda: apps.read_namespaced_daemon_set(name, namespace),
+        "Job": lambda: batch.read_namespaced_job(name, namespace),
+        "CronJob": lambda: batch.read_namespaced_cron_job(name, namespace),
+        "ConfigMap": lambda: core.read_namespaced_config_map(name, namespace),
+    }
+    try:
+        obj = client.ApiClient().sanitize_for_serialization(readers[kind]())
+    except client.ApiException as exc:
+        return f"could not read {kind} {namespace}/{name}: {exc.status} {exc.reason}"
+    if kind == "ConfigMap":
+        return _j({"data": {k: str(v)[:300] for k, v in (obj.get("data") or {}).items()},
+                   "binary_keys": list((obj.get("binaryData") or {}).keys())})
+    return _j({"spec": obj.get("spec"), "status": obj.get("status")})
+
+
 READ_TOOLS = [
     list_nodes, list_pods, describe_pod, get_events, get_pod_logs,
-    get_namespace_events, search_logs, get_deployment, get_service,
+    get_namespace_events, search_logs, get_object, get_service,
     describe_node, get_metric_history, search_runbooks,
 ]
 READ_TOOL_MAP = {t.name: t for t in READ_TOOLS}

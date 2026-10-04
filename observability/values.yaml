@@ -92,3 +92,33 @@ serverFiles:
             labels: { severity: info }
             annotations:
               summary: Deployment is scaled to zero replicas
+          - alert: ServiceNoEndpoints
+            expr: label_replace(kube_endpointslice_info{namespace="demo"} unless on (namespace, endpointslice) kube_endpointslice_endpoints{namespace="demo"}, "service", "$1", "endpointslice", "(.*)-[a-z0-9]{5}")
+            for: 2m
+            labels: { severity: warning }
+            annotations:
+              summary: Service has no endpoints (its selector matches no ready pod)
+          - alert: StatefulSetReplicasUnavailable
+            expr: kube_statefulset_replicas{namespace="demo"} > kube_statefulset_status_replicas_ready{namespace="demo"}
+            for: 2m
+            labels: { severity: warning }
+            annotations:
+              summary: StatefulSet has fewer ready replicas than desired
+          - alert: DaemonSetNotReady
+            expr: kube_daemonset_status_desired_number_scheduled{namespace="demo"} > kube_daemonset_status_number_ready{namespace="demo"}
+            for: 2m
+            labels: { severity: warning }
+            annotations:
+              summary: DaemonSet has pods that are not ready
+          - alert: JobFailed
+            expr: kube_job_status_failed{namespace="demo"} > 0
+            for: 1m
+            labels: { severity: warning }
+            annotations:
+              summary: Job has failed pods
+          - alert: CronJobSuspended
+            expr: kube_cronjob_spec_suspend{namespace="demo"} == 1
+            for: 1m
+            labels: { severity: info }
+            annotations:
+              summary: CronJob is suspended

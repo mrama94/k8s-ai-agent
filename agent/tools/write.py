@@ -3,7 +3,7 @@ import datetime
 from kubernetes import client
 
 from k8s_client import apps, core
-from tools import guards
+from tools import guards, patching
 
 REVISION = "deployment.kubernetes.io/revision"
 
@@ -48,7 +48,17 @@ def rollback_deployment(namespace: str, name: str) -> str:
     return f"rolled back {namespace}/{name} to revision {target.metadata.annotations[REVISION]}"
 
 
+def patch_resource(kind: str, namespace: str, name: str, patch) -> str:
+    return patching.apply(kind, namespace, name, patching.parse_patch(patch))
+
+
+def delete_resource(kind: str, namespace: str, name: str) -> str:
+    return patching.delete(kind, namespace, name)
+
+
 WRITE_TOOLS = {
+    "patch_resource": patch_resource,
+    "delete_resource": delete_resource,
     "label_node": label_node,
     "delete_pod": delete_pod,
     "restart_deployment": restart_deployment,

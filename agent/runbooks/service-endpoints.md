@@ -7,3 +7,5 @@ Symptoms: requests to a Service fail or time out, endpoints_ready is 0.
 3. Matching pods that are not ready point to a failing readiness probe. Use describe_pod and get_events.
 4. Check that the Service target_port equals the containerPort the app listens on.
 5. For traffic through an Ingress, use list_ingresses and confirm the backend Service name and port.
+6. A wrong selector or port is fixed with patch_resource on the Service, for example
+   {"spec": {"selector": {"app": "<label the pods really have>"}}}. Use get_object (kind Service) to read the current selector and ports.

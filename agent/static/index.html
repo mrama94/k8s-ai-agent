@@ -84,7 +84,8 @@ function render(data, out) {
     add(out, 'h3', 'Proposed plan');
     add(out, 'p', data.plan.summary);
     for (const a of data.plan.actions) {
-      const text = `${a.tool}(${JSON.stringify(a.args)})\n${a.reason}\nguard: ${a.guard}`;
+      const changes = a.preview ? `\nchanges:\n  ${a.preview.join('\n  ')}` : '';
+      const text = `${a.tool}(${JSON.stringify(a.args)})\n${a.reason}${changes}\nguard: ${a.guard}`;
       add(out, 'pre', text, a.guard === 'allowed' ? '' : 'blocked');
     }
   }

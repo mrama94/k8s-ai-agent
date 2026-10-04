@@ -1,9 +1,13 @@
 import os
 
+from kubernetes import client
+
 from k8s_client import apps, core
+from tools import patching
 
 ALLOWED_ACTIONS = {
     "label_node", "delete_pod", "restart_deployment", "scale_deployment", "rollback_deployment",
+    "patch_resource", "delete_resource",
 }
 ALLOWED_NAMESPACES = set(os.getenv("ALLOWED_NAMESPACES", "demo").split(","))
 ALLOWED_LABEL_KEYS = {"type"}
@@ -55,3 +59,18 @@ def check(action: dict) -> None:
         pod = core.read_namespaced_pod(args.get("name", ""), args["namespace"])
         if not pod.metadata.owner_references:
             raise GuardError("pod has no controller, so deleting it would remove it permanently")
+    if tool in {"patch_resource", "delete_resource"}:
+        kind = args.get("kind")
+        if kind not in patching.KINDS:
+            raise GuardError(f"kind '{kind}' is not allowed (allowed: {sorted(patching.KINDS)})")
+        if tool == "delete_resource" and kind not in patching.DELETE_KINDS:
+            raise GuardError(f"deleting a {kind} is not allowed; patch, restart, scale or roll it back instead")
+        try:
+            patching.read(kind, args.get("name", ""), args["namespace"])
+        except client.ApiException as exc:
+            raise GuardError(f"{kind} {args['namespace']}/{args.get('name')} could not be read ({exc.status} {exc.reason})")
+    if tool == "patch_resource":
+        try:
+            patching.parse_patch(args.get("patch"))
+        except patching.PatchError as exc:
+            raise GuardError(str(exc))

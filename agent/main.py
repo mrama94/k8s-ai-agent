@@ -170,7 +170,9 @@ def alert(payload: dict, authorization: str | None = Header(default=None)):
     for item in payload.get("alerts", []):
         labels, notes = item.get("labels", {}), item.get("annotations", {})
         namespace = _clean(labels.get("namespace"))
-        resource = _clean(labels.get("pod") or labels.get("deployment") or labels.get("node"), 100)
+        resource = _clean(
+            next((labels[k] for k in ("pod", "deployment", "statefulset", "daemonset", "job_name", "cronjob",
+                                      "service", "node") if labels.get(k)), ""), 100)
         name = _clean(labels.get("alertname"), 100)
         if namespace not in guards.ALLOWED_NAMESPACES or not resource or not name:
             ignored += 1
