@@ -1,0 +1,18 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: agentd
+  namespace: demo
+spec:
+  selector:
+    matchLabels:
+      app: agentd
+  template:
+    metadata:
+      labels:
+        app: agentd
+    spec:
+      containers:
+        - name: agentd
+          image: busybox:no-such-tag-agentd
+          command: ["sleep", "3600"]

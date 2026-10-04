@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: probe-bad
+  namespace: demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: probe-bad
+  template:
+    metadata:
+      labels:
+        app: probe-bad
+    spec:
+      containers:
+        - name: web
+          image: nginx
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8081
+            periodSeconds: 5
