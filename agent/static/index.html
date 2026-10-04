@@ -123,8 +123,9 @@ async function guarded(out, fn, busyText) {
         data = await res.json();
         failures = 0;
       } catch (e) {
-        if (++failures >= 15) throw e;  // tolerate brief port-forward drops
-        continue;
+        if (++failures >= 150) throw new Error(`Lost connection to the agent (run ${thread_id}). Restart the port-forward and reload.`);
+        out.textContent = `Lost connection to the agent, retrying... (run ${thread_id})`;
+        continue;  // the run continues in the pod; keep polling for about 5 minutes
       }
       if (data.status === 'running') {
         const done = data.steps.map((s) => STEP_LABELS[s] || s).join(' > ');

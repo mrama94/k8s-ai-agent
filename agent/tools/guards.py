@@ -1,6 +1,6 @@
 import os
 
-from k8s_client import core
+from k8s_client import apps, core
 
 ALLOWED_ACTIONS = {
     "label_node", "delete_pod", "restart_deployment", "scale_deployment", "rollback_deployment",
@@ -29,6 +29,24 @@ def check(action: dict) -> None:
         node = core.read_node(args.get("node", ""))
         if "node-role.kubernetes.io/control-plane" in (node.metadata.labels or {}):
             raise GuardError("control-plane nodes are off limits")
+        wanted = (args.get("key"), args.get("value"))
+        if not any(
+            (p.spec.node_selector or {}).get(wanted[0]) == wanted[1]
+            for ns in ALLOWED_NAMESPACES
+            for p in core.list_namespaced_pod(ns).items
+        ):
+            raise GuardError(f"no pod in the allowed namespaces has nodeSelector {wanted[0]}={wanted[1]}")
+    if tool == "rollback_deployment":
+        dep = apps.read_namespaced_deployment(args.get("name", ""), args["namespace"])
+        revision = "deployment.kubernetes.io/revision"
+        current = int(dep.metadata.annotations.get(revision, "0"))
+        earlier = [
+            rs for rs in apps.list_namespaced_replica_set(args["namespace"]).items
+            if any(o.uid == dep.metadata.uid for o in (rs.metadata.owner_references or []))
+            and int(rs.metadata.annotations.get(revision, "0")) < current
+        ]
+        if not earlier:
+            raise GuardError("deployment has no earlier revision to roll back to")
     if tool == "scale_deployment":
         replicas = args.get("replicas")
         if not isinstance(replicas, int) or not 1 <= replicas <= MAX_REPLICAS:

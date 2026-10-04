@@ -197,7 +197,14 @@ def get_service(namespace: str, name: str) -> str:
         not_ready = sum(len(s.not_ready_addresses or []) for s in (ep.subsets or []))
     except Exception:
         ready = not_ready = 0
+    problem = None
+    if selector and not matching:
+        problem = (f"The selector {selector} matches NO pods in this namespace, so the Service has no endpoints. "
+                   "Compare it with the pod labels from list_pods: a typo in the selector or in the pod labels is the likely cause.")
+    elif matching and not ready:
+        problem = "Pods match the selector but none is ready, so the Service has no ready endpoints."
     return _j({
+        "problem": problem,
         "type": svc.spec.type,
         "selector": selector,
         "ports": [{"port": p.port, "target_port": p.target_port} for p in svc.spec.ports],
