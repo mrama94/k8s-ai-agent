@@ -41,7 +41,9 @@
     }
    ],
    "fieldConfig": {
-    "defaults": {},
+    "defaults": {
+     "noValue": "No alerts firing"
+    },
     "overrides": []
    },
    "options": {},
@@ -69,6 +71,66 @@
    ]
   },
   {
+   "id": 10,
+   "title": "Alert history (last 6 hours)",
+   "type": "state-timeline",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "timeFrom": "6h",
+   "gridPos": {
+    "x": 0,
+    "y": 6,
+    "w": 24,
+    "h": 7
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "max by (alertname, pod, deployment) (ALERTS{alertstate=\"firing\", namespace=\"$namespace\"})",
+     "legendFormat": "{{alertname}}: {{pod}}{{deployment}}",
+     "interval": "60s"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "noValue": "No alerts in the last 6 hours",
+     "min": 0,
+     "max": 1,
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "firing",
+         "color": "red",
+         "index": 0
+        }
+       }
+      }
+     ],
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "red"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "showValue": "never",
+    "mergeValues": true,
+    "rowHeight": 0.8,
+    "legend": {
+     "showLegend": false
+    }
+   }
+  },
+  {
    "id": 2,
    "title": "Pods by phase",
    "type": "timeseries",
@@ -78,7 +140,7 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 6,
+    "y": 13,
     "w": 8,
     "h": 7
    },
@@ -95,7 +157,9 @@
     }
    ],
    "fieldConfig": {
-    "defaults": {},
+    "defaults": {
+     "noValue": "No pods in this namespace"
+    },
     "overrides": []
    },
    "options": {}
@@ -110,7 +174,7 @@
    },
    "gridPos": {
     "x": 8,
-    "y": 6,
+    "y": 13,
     "w": 8,
     "h": 7
    },
@@ -128,7 +192,9 @@
     }
    ],
    "fieldConfig": {
-    "defaults": {},
+    "defaults": {
+     "noValue": "No containers are waiting"
+    },
     "overrides": []
    },
    "options": {},
@@ -164,7 +230,7 @@
    },
    "gridPos": {
     "x": 16,
-    "y": 6,
+    "y": 13,
     "w": 8,
     "h": 7
    },
@@ -181,7 +247,9 @@
     }
    ],
    "fieldConfig": {
-    "defaults": {},
+    "defaults": {
+     "noValue": "No restarts recorded"
+    },
     "overrides": []
    },
    "options": {}
@@ -196,7 +264,7 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 13,
+    "y": 20,
     "w": 8,
     "h": 7
    },
@@ -213,7 +281,9 @@
     }
    ],
    "fieldConfig": {
-    "defaults": {},
+    "defaults": {
+     "noValue": "No Deployments in this namespace"
+    },
     "overrides": []
    },
    "options": {}
@@ -228,7 +298,7 @@
    },
    "gridPos": {
     "x": 8,
-    "y": 13,
+    "y": 20,
     "w": 8,
     "h": 7
    },
@@ -245,7 +315,9 @@
     }
    ],
    "fieldConfig": {
-    "defaults": {},
+    "defaults": {
+     "noValue": "No Deployments in this namespace"
+    },
     "overrides": []
    },
    "options": {}
@@ -260,7 +332,7 @@
    },
    "gridPos": {
     "x": 16,
-    "y": 13,
+    "y": 20,
     "w": 8,
     "h": 7
    },
@@ -277,7 +349,9 @@
     }
    ],
    "fieldConfig": {
-    "defaults": {},
+    "defaults": {
+     "noValue": "No pods are unready"
+    },
     "overrides": []
    },
    "options": {}
@@ -292,7 +366,7 @@
    },
    "gridPos": {
     "x": 0,
-    "y": 20,
+    "y": 27,
     "w": 12,
     "h": 7
    },
@@ -310,7 +384,8 @@
    ],
    "fieldConfig": {
     "defaults": {
-     "unit": "bytes"
+     "unit": "bytes",
+     "noValue": "No pods in this namespace"
     },
     "overrides": []
    },
@@ -326,7 +401,7 @@
    },
    "gridPos": {
     "x": 12,
-    "y": 20,
+    "y": 27,
     "w": 12,
     "h": 7
    },
@@ -344,7 +419,8 @@
    ],
    "fieldConfig": {
     "defaults": {
-     "unit": "short"
+     "unit": "short",
+     "noValue": "No pods in this namespace"
     },
     "overrides": []
    },
