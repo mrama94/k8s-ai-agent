@@ -1,0 +1,245 @@
+# How this project works
+
+This project is an **AI assistant for a Kubernetes cluster**. You tell it about a problem (or it hears about one from an
+alert), it investigates, it proposes a fix, and **it changes nothing until you click Approve**. Everything runs on one
+Mac, for free: a small AI model, a practice cluster, and a monitoring stack.
+
+For how to start and stop it, see [RUNNING.md](RUNNING.md). For test scenarios, see [TESTING.md](TESTING.md).
+
+## The idea in one minute
+
+Think of it as a junior on-call engineer with strict rules:
+
+1. **It looks around** using read-only tools (list pods, read events, read logs, read metrics).
+2. **It writes down what it thinks is wrong** and how sure it is.
+3. **It proposes a small fix** and shows you exactly what would change.
+4. **It waits for you.** Nothing happens without your click.
+5. **It applies the fix, then checks the cluster itself** to see whether the problem is gone.
+
+If it is not sure, or no safe fix exists, it says so and proposes nothing.
+
+## The big picture
+
+```
+ YOUR MAC
+ ┌──────────────────────────────────────────────────────────────────────────────┐
+ │                                                                              │
+ │   Browser ──► http://localhost:8000 (chat + alerts)    http://localhost:3000 │
+ │      │             (kubectl port-forward)                    (Grafana)       │
+ │      │                                                                       │
+ │   Ollama  ◄──── the AI model (qwen2.5:7b) runs here, on the Mac's GPU        │
+ │      ▲                                                                       │
+ │      │ asks questions (host.docker.internal:11434)                           │
+ │ ┌────┼────────────────────────────────────────────────────────────────────┐  │
+ │ │ DOCKER  ┌──────────────────── kind cluster "agent-lab" ───────────────┐ │  │
+ │ │         │                                                              │ │  │
+ │ │         │  namespace ai-agent        namespace demo                    │ │  │
+ │ │         │  ┌──────────────────┐      ┌─────────────────────────┐       │ │  │
+ │ │         │  │  THE AGENT       │─────►│ the workloads we break  │       │ │  │
+ │ │         │  │  (FastAPI +      │ read │ and the agent may fix   │       │ │  │
+ │ │         │  │   LangGraph)     │ and  └─────────────────────────┘       │ │  │
+ │ │         │  │  + SQLite file   │ fix                                    │ │  │
+ │ │         │  └───▲──────────────┘                                        │ │  │
+ │ │         │      │ webhook          namespace monitoring                 │ │  │
+ │ │         │  ┌───┴─────────────────────────────────────────────┐        │ │  │
+ │ │         │  │ Alertmanager ◄─ Prometheus ◄─ kube-state-metrics│        │ │  │
+ │ │         │  │ Grafana (dashboards)    Loki ◄─ Alloy (logs)    │        │ │  │
+ │ │         │  └─────────────────────────────────────────────────┘        │ │  │
+ │ │         └──────────────────────────────────────────────────────────────┘ │  │
+ │ └─────────────────────────────────────────────────────────────────────────┘  │
+ └──────────────────────────────────────────────────────────────────────────────┘
+```
+
+| Piece | What it is | Why it is here |
+|---|---|---|
+| **Ollama + qwen2.5:7b** | A small AI model running on your Mac | It does the thinking. It runs outside the cluster so it can use the Mac's GPU. |
+| **kind cluster `agent-lab`** | A real Kubernetes cluster (two nodes) running inside Docker | A safe place to practise. Nothing here is production. |
+| **The agent** (namespace `ai-agent`) | A Python web service | The brain and the rules: investigate, plan, ask for approval, apply, verify. |
+| **demo namespace** | Where the test workloads live | The only place the agent is allowed to make changes. |
+| **Prometheus, Alertmanager, kube-state-metrics** | The monitoring stack | Notice problems and send alerts to the agent. |
+| **Grafana** | Dashboards | Lets *you* see graphs, alert history and logs. |
+| **Loki + Alloy** | Log storage and collection | Keeps pod logs, even after a pod is deleted. |
+| **SQLite file** | A small database on a volume | Remembers runs, conversation summaries and alerts. |
+
+## How the agent thinks: five steps
+
+The agent is built with **LangGraph**, which lets us draw the steps as a flowchart and pause in the middle.
+
+```
+        ┌─────────────┐   ┌──────────┐   ┌────────────────┐
+ start ►│ INVESTIGATE │──►│ PROPOSE  │──►│ HUMAN APPROVAL │──┐
+        └─────▲───────┘   └──────────┘   └───────┬────────┘  │ (rejected, or
+              │                                  │ approved   │  nothing to run)
+              │                          ┌───────▼────────┐   ▼
+              │ not fixed,               │   APPLY FIX    │  END
+              │ attempts left            └───────┬────────┘
+              │                          ┌───────▼────────┐
+              └──────────────────────────│  VERIFY FIX    │──► fixed ──► END
+                                         └────────────────┘
+```
+
+1. **Investigate.** The model may call read-only tools, up to 12 rounds. It must start broad (pods, warning events),
+   look at the team runbooks, list a few possible causes, and test each. It then writes a **diagnosis**: root cause,
+   confidence (high, medium or low), evidence, and what it ruled out.
+2. **Propose.** If confidence is low, it proposes nothing. Otherwise the model writes a plan of at most 3 actions.
+   The agent then checks every action against the safety rules and, for edits, runs a **dry run** to show exactly which
+   fields would change.
+3. **Human approval.** The run **pauses** and its state is saved. The page shows the diagnosis, the plan, the safety
+   verdict for each action, and Approve and Reject buttons. Reject, or a plan with nothing runnable, ends the run.
+4. **Apply.** Plain code (not the model) runs the approved actions, and checks the safety rules again first.
+5. **Verify.** After a short wait, **plain code** reads the live cluster: are all pods ready, do Deployments have all
+   their replicas, do Services have endpoints? It polls for up to 90 seconds. If the problem remains and a second
+   attempt is allowed, the run goes back to Investigate with a note of what already failed, and asks for approval again.
+
+> **Key design rule:** the model never holds the write tools. It can only *describe* a fix as data. Code applies it,
+> after you approve. And the final "is it fixed?" check is done by code, because the small model sometimes
+> misjudges what it sees.
+
+## What the agent can look at (12 read-only tools)
+
+| Tool | What it shows |
+|---|---|
+| `list_nodes`, `describe_node` | Nodes, their labels and taints, free capacity |
+| `list_pods`, `describe_pod` | Pods, their state, restarts, and the reason for the last crash (for example OOMKilled) |
+| `get_events`, `get_namespace_events` | Kubernetes events and warnings |
+| `get_pod_logs` | Current logs (falls back to stored logs if the pod no longer exists) |
+| `search_logs` | Stored logs from Loki, including crashed and deleted pods |
+| `get_object` | Any Deployment (with rollout history), StatefulSet, DaemonSet, Job, CronJob, Service or ConfigMap |
+| `get_service` | A Service's selector, endpoints and matching pods, with a plain note if nothing matches |
+| `get_metric_history` | How memory, CPU or restarts changed over the last minutes (from Prometheus) |
+| `search_runbooks` | The team's troubleshooting guides in `agent/runbooks/` |
+
+Tools return small, tidy output because a small model gets lost in long dumps. The agent cannot read Secrets.
+
+## What the agent can change (7 actions)
+
+| Action | Use |
+|---|---|
+| `label_node` | Add a label to a worker node (key `type` only) |
+| `delete_pod` | Remove a pod that a controller will recreate |
+| `restart_deployment` | Rolling restart |
+| `scale_deployment` | Change replicas (1 to 5) |
+| `rollback_deployment` | Go back to the previous revision |
+| `patch_resource` | Edit one Deployment, StatefulSet, DaemonSet, Job, CronJob, Service or ConfigMap |
+| `delete_resource` | Delete a Job, CronJob, Service or ConfigMap |
+
+## Two layers of safety
+
+```
+   model's plan ──► GUARDS (our code) ──► approval (you) ──► GUARDS again ──► Kubernetes API
+                                                                                   │
+                                                                      RBAC (the cluster itself)
+```
+
+**Layer 1: guards (soft limit, in code)**, checked when the plan is made and again just before applying. Deny by default:
+- Only the `demo` namespace. Only the listed actions and kinds.
+- A pod can only be deleted if a controller will recreate it.
+- Nodes: only the `type` label, never the control plane, and only if a pod in `demo` really asks for that label.
+- Rollback only if there is an earlier revision. Replicas between 1 and 5.
+- Patches: valid JSON, at most 3,000 characters, only `spec`, `data` and labels or annotations. Fields that widen power
+  (`hostNetwork`, `privileged`, `hostPath`, `securityContext`, `serviceAccountName`, Services of type LoadBalancer or
+  NodePort) are refused. A patch the API rejects in a dry run, or that changes nothing, is blocked.
+- Workloads (Deployments, StatefulSets, DaemonSets) cannot be deleted.
+
+**Layer 2: RBAC (hard limit, in Kubernetes).** The agent runs as its own ServiceAccount. Even if the code were wrong or
+the model were tricked, the API refuses anything outside what that account may do: read most things cluster-wide,
+read ConfigMaps only in `demo`, patch a fixed set of kinds only in `demo`, patch nodes (for labels), and **nothing** for
+Secrets, RBAC objects, creating objects, or other namespaces.
+
+**Other protections**
+- Text from the cluster (logs, events, alert text) is marked as untrusted in the prompts, and alert text is cleaned.
+- The chat page writes model output as plain text, so it cannot inject markup.
+- The webhook that receives alerts needs a secret token.
+- Every model call has a time limit and a reply-length cap, so a looping model cannot block everything.
+
+## Two ways a run starts
+
+### 1. You type a request
+```
+ you ─► page ─► POST /api/chat ─► background job runs the 5 steps ─► page polls /api/status
+                                  (pauses at approval) ─► you click ─► POST /api/approve ─► job resumes
+```
+Runs happen in the background and the page checks progress every two seconds, so a slow model never freezes the page or
+depends on one long network connection.
+
+### 2. An alert fires
+```
+ problem starts ─► Prometheus (checks every 30 s, rule must hold 1 to 2 min) ─► Alertmanager (groups 10 s)
+   ─► webhook POST /api/alert ─► agent starts a run ─► pauses at approval ─► shows up in the "Alerts" panel
+```
+Rules for alert runs:
+- Only alerts from allowed namespaces start runs.
+- One run per resource every 15 minutes, and **one alert run at a time** (one local model); others show `queued`.
+- If the agent restarts mid-run, unfinished alert runs resume on their own.
+- Alerts always stop at approval. The agent never fixes anything by itself.
+
+## Observability: how the agent and you see the cluster
+
+| Need | Component | How it is used |
+|---|---|---|
+| Is something wrong? | kube-state-metrics + Prometheus rules | Rules for Pending pods, crash loops, image pull failures, unready pods, unavailable replicas, scaled-to-zero Deployments, Services without endpoints, StatefulSets, DaemonSets, failed Jobs, suspended CronJobs |
+| Tell the agent | Alertmanager | Webhook to the agent |
+| What happened before? | Prometheus (6 hours) | `get_metric_history` tool and the Grafana graphs |
+| What did it print? | Alloy collects logs, Loki stores 6 hours | `search_logs` tool and the Grafana Logs panel |
+| Let a human look | Grafana dashboard "Demo workloads" | Pods by phase, restarts, replicas, memory, CPU, firing alerts, alert history, logs |
+
+Prometheus and Loki have no persistent storage here, so their history resets if their pods restart.
+
+## What is remembered, and where
+
+| What | Where | How long |
+|---|---|---|
+| Graph state of every run (so it can pause for approval and resume) | SQLite file on a volume in the agent pod | Survives restarts |
+| One short summary per finished turn, for follow-up questions | Same file | The last 5 turns of a conversation are fed to the next message |
+| The alerts list and each alert's run | Same file | Survives restarts |
+| Running-job progress | In the agent's memory | Lost on restart (alert runs resume) |
+| Metrics and logs | Prometheus and Loki | 6 hours |
+
+A **conversation** is just a shared id. Each message still runs as its own clean run, with short summaries of earlier
+messages added as background.
+
+## Where things live in the repo
+
+```
+agent/                      the agent (runs in the cluster)
+  main.py                   web API, background jobs, alert webhook, conversation summaries
+  graph.py                  the five-step flowchart, prompts, plan checks, verification
+  llm.py                    connection to Ollama (time limit, reply cap)
+  usage_tracker.py          counts tokens and time per run
+  k8s_client.py             Kubernetes API connections
+  tools/read.py             the 12 read-only tools
+  tools/write.py            the actions that apply an approved plan
+  tools/guards.py           the safety rules
+  tools/patching.py         parse, dry-run and apply object edits
+  tools/runbooks.py         keyword search over the runbooks
+  runbooks/                 team troubleshooting guides (plain Markdown)
+  static/index.html         the chat and alerts page (no build step)
+k8s/                        manifests: agent Deployment, RBAC, volume, Service; k8s/demo/ has the broken workloads
+observability/              Helm values and install script for Prometheus, Alertmanager, Grafana, Loki, Alloy;
+                            demo-workloads.json is the dashboard
+scripts/                    portforward.sh and stop-portforward.sh
+RUNNING.md  TESTING.md  ARCHITECTURE.md   how to run it, what to test, this page
+```
+
+## Why it is built this way
+
+- **A small local model**, so it is free and private. The price is reliability, so the design adds structure:
+  required fields, confidence ratings, retries for missing details, and code doing the checks that matter.
+- **Approval before every change**, because a 7B model still makes wrong plans (we saw it propose labelling the wrong
+  node and rolling back a Deployment with no history).
+- **Two safety layers** so one mistake is not enough to cause damage.
+- **Background jobs with polling**, because local model runs take minutes.
+- **Alerts feed the same flow as chat**, so there is one path to test and one place to approve.
+
+## Known limits
+
+- **Lab only.** No login on the agent page (it is reachable only through a port-forward on your Mac), no persistent
+  monitoring storage, Ollama listens on all network interfaces, and metrics-server runs in an insecure lab mode.
+- **The model is the weak link.** It handles a single clear fault well and can still misdiagnose or name the wrong
+  object. The approval step, guards, dry-run preview and code-based verification exist for exactly that.
+- **It can only act in `demo`.** Everything else is read-only, and Secrets are not readable at all.
+- **It does not look on its own.** It acts on your requests and on alert rules; a problem with no rule and no mention is
+  never seen.
+- **One model run at a time**, so busy periods queue up.
+- **Not everything is fixable.** Causes in application code, missing credentials, a database that is down, or not enough
+  cluster capacity end with a diagnosis and an empty plan, which is the correct answer.
