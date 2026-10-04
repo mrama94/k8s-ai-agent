@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: big
+  namespace: demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: big
+  template:
+    metadata:
+      labels:
+        app: big
+    spec:
+      containers:
+        - name: big
+          image: nginx
+          resources:
+            requests:
+              cpu: "64"
+              memory: 1Gi
