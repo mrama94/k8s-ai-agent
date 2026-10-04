@@ -206,6 +206,22 @@ def alert(payload: dict, authorization: str | None = Header(default=None)):
     return {"started": started, "ignored": ignored}
 
 
+def _resume_interrupted() -> None:
+    """After a restart, continue alert runs that were cut off (Alertmanager will not resend for an hour)."""
+    with db_lock:
+        rows = db.execute("SELECT thread_id FROM alerts WHERE state = 'firing'").fetchall()
+    for (thread_id,) in rows:
+        try:
+            nxt = graph.get_state(_config(thread_id)).next
+        except Exception:
+            continue
+        if nxt and "human_approval" not in nxt and thread_id not in jobs:
+            _start(thread_id, None, gated=True)  # None resumes from the last checkpoint
+
+
+_resume_interrupted()
+
+
 @app.get("/api/alerts")
 def list_alerts():
     with db_lock:

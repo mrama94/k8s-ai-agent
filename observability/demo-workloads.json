@@ -47,17 +47,22 @@
    "options": {},
    "transformations": [
     {
-     "id": "organize",
+     "id": "labelsToFields",
      "options": {
-      "excludeByName": {
-       "Time": true,
-       "Value": true,
-       "__name__": true,
-       "alertstate": true,
-       "job": true,
-       "instance": true,
-       "endpoint": true,
-       "service": true
+      "mode": "columns"
+     }
+    },
+    {
+     "id": "filterFieldsByName",
+     "options": {
+      "include": {
+       "names": [
+        "alertname",
+        "pod",
+        "deployment",
+        "severity",
+        "namespace"
+       ]
       }
      }
     }
@@ -129,18 +134,21 @@
    "options": {},
    "transformations": [
     {
-     "id": "organize",
+     "id": "labelsToFields",
      "options": {
-      "excludeByName": {
-       "Time": true,
-       "__name__": true,
-       "Value": true,
-       "job": true,
-       "instance": true,
-       "endpoint": true,
-       "service": true,
-       "uid": true,
-       "container": false
+      "mode": "columns"
+     }
+    },
+    {
+     "id": "filterFieldsByName",
+     "options": {
+      "include": {
+       "names": [
+        "pod",
+        "container",
+        "reason",
+        "namespace"
+       ]
       }
      }
     }
