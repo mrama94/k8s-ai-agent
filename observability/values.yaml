@@ -1,0 +1,94 @@
+# Prometheus + Alertmanager + kube-state-metrics, sized for a laptop kind cluster.
+# Chart: prometheus-community/prometheus 29.35.0 (pinned in install.sh).
+server:
+  retention: 6h
+  global:
+    scrape_interval: 30s
+    evaluation_interval: 30s
+  persistentVolume:
+    enabled: false
+  resources:
+    requests: { cpu: 50m, memory: 200Mi }
+    limits: { memory: 400Mi }
+
+alertmanager:
+  enabled: true
+  persistence:
+    enabled: false
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { memory: 64Mi }
+  extraSecretMounts:
+    - name: alert-webhook-token
+      mountPath: /etc/alert-webhook
+      secretName: alert-webhook-token
+      readOnly: true
+  config:
+    route:
+      receiver: k8s-agent
+      group_by: [alertname, namespace]
+      group_wait: 10s
+      group_interval: 1m
+      repeat_interval: 1h
+    receivers:
+      - name: k8s-agent
+        webhook_configs:
+          - url: http://k8s-agent.ai-agent.svc:8000/api/alert
+            send_resolved: true
+            http_config:
+              authorization:
+                type: Bearer
+                credentials_file: /etc/alert-webhook/token
+
+kube-state-metrics:
+  enabled: true
+  resources:
+    requests: { cpu: 10m, memory: 48Mi }
+    limits: { memory: 128Mi }
+
+prometheus-node-exporter:
+  enabled: false
+prometheus-pushgateway:
+  enabled: false
+
+serverFiles:
+  alerting_rules.yml:
+    groups:
+      - name: demo-workloads
+        rules:
+          - alert: PodPending
+            expr: kube_pod_status_phase{namespace="demo", phase="Pending"} == 1
+            for: 1m
+            labels: { severity: warning }
+            annotations:
+              summary: Pod is stuck in Pending
+          - alert: PodCrashLooping
+            expr: kube_pod_container_status_waiting_reason{namespace="demo", reason="CrashLoopBackOff"} == 1
+            for: 1m
+            labels: { severity: warning }
+            annotations:
+              summary: Container is in CrashLoopBackOff
+          - alert: PodImagePullFailing
+            expr: kube_pod_container_status_waiting_reason{namespace="demo", reason=~"ErrImagePull|ImagePullBackOff"} == 1
+            for: 1m
+            labels: { severity: warning }
+            annotations:
+              summary: Container image cannot be pulled
+          - alert: PodNotReady
+            expr: kube_pod_status_ready{namespace="demo", condition="false"} * on (namespace, pod) kube_pod_status_phase{namespace="demo", phase="Running"} == 1
+            for: 2m
+            labels: { severity: warning }
+            annotations:
+              summary: Pod is Running but not Ready
+          - alert: DeploymentReplicasUnavailable
+            expr: kube_deployment_spec_replicas{namespace="demo"} > kube_deployment_status_replicas_available{namespace="demo"}
+            for: 2m
+            labels: { severity: warning }
+            annotations:
+              summary: Deployment has fewer available replicas than desired
+          - alert: DeploymentScaledToZero
+            expr: kube_deployment_spec_replicas{namespace="demo"} == 0
+            for: 1m
+            labels: { severity: info }
+            annotations:
+              summary: Deployment is scaled to zero replicas

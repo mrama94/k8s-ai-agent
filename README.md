@@ -12,3 +12,11 @@ Ollama (qwen2.5:7b) + kind cluster `agent-lab` + LangGraph agent with approval g
     kubectl -n ai-agent port-forward svc/k8s-agent 8000:8000   # http://localhost:8000
 
 Demo incidents are in `k8s/demo/`. Teardown: `kind delete cluster --name agent-lab`, stop `ollama serve`.
+
+## Alert-driven runs (observability)
+
+    ./observability/install.sh   # Prometheus + Alertmanager + kube-state-metrics in "monitoring"; creates the webhook token Secret
+    kubectl apply -k k8s/ && kubectl -n ai-agent rollout restart deploy/k8s-agent
+
+Alert rules (namespace `demo`) are in `observability/values.yaml`. Alertmanager posts to the agent's `/api/alert`
+(bearer token, one run per resource per 15 min, one alert run at a time). Runs stop at approval; the page lists them under "Alerts".

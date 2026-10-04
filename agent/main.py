@@ -1,18 +1,23 @@
+import hmac
 import os
+import re
 import sqlite3
 import threading
 import time
 import uuid
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from langgraph.types import Command
 from pydantic import BaseModel
 
 from graph import build_graph
+from tools import guards
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ALERT_TOKEN = os.getenv("ALERT_TOKEN", "")
+ALERT_COOLDOWN = int(os.getenv("ALERT_COOLDOWN_SECONDS", "900"))  # one run per resource per window
 USAGE_KEYS = ("tokens_in", "tokens_out", "llm_calls", "llm_seconds")
 
 app = FastAPI(title="Local Kubernetes Agent")
@@ -27,8 +32,13 @@ db.execute(
     "CREATE TABLE IF NOT EXISTS summaries "
     "(thread_id TEXT PRIMARY KEY, conv_id TEXT, created REAL, summary TEXT)"
 )
+db.execute(
+    "CREATE TABLE IF NOT EXISTS alerts (thread_id TEXT PRIMARY KEY, key TEXT, alertname TEXT, "
+    "namespace TEXT, resource TEXT, summary TEXT, state TEXT, created REAL)"
+)
 db.commit()
 db_lock = threading.Lock()
+alert_slot = threading.Semaphore(1)  # alert-triggered investigations run one at a time (one local model)
 
 # In-memory job table: graph runs happen in background threads so no HTTP request stays open
 # for minutes (kubectl port-forward drops long connections). The page polls /api/status.
@@ -108,6 +118,7 @@ def _snapshot(thread_id: str) -> dict:
         "status": status,
         "error": job.get("error"),
         "steps": job.get("steps", []),
+        "queued": bool(job.get("queued")),
         "elapsed": round((job.get("finished") or time.time()) - job["started"], 1) if job else 0,
         "diagnosis": values.get("diagnosis"),
         "plan": values.get("plan"),
@@ -119,9 +130,14 @@ def _snapshot(thread_id: str) -> dict:
     }
 
 
-def _run(thread_id: str, graph_input) -> None:
+def _run(thread_id: str, graph_input, gated: bool = False) -> None:
     """Run (or resume) the graph to its next pause or end, recording progress."""
     job = jobs[thread_id]
+    if gated:
+        job["queued"] = True
+        alert_slot.acquire()
+        job["queued"] = False
+        job["started"] = time.time()
     try:
         for update in graph.stream(graph_input, _config(thread_id), stream_mode="updates"):
             job["steps"].extend(k for k in update if not k.startswith("__"))
@@ -130,11 +146,83 @@ def _run(thread_id: str, graph_input) -> None:
     finally:
         job["running"] = False
         job["finished"] = time.time()
+        if gated:
+            alert_slot.release()
 
 
-def _start(thread_id: str, graph_input) -> None:
+def _start(thread_id: str, graph_input, gated: bool = False) -> None:
     jobs[thread_id] = {"running": True, "steps": [], "started": time.time()}
-    threading.Thread(target=_run, args=(thread_id, graph_input), daemon=True).start()
+    threading.Thread(target=_run, args=(thread_id, graph_input, gated), daemon=True).start()
+
+
+def _clean(value, limit: int = 200) -> str:
+    """Alert labels and annotations are untrusted text: keep a safe character set and a short length."""
+    return re.sub(r"[^\w .:/@=,-]", "", str(value or ""))[:limit]
+
+
+@app.post("/api/alert")
+def alert(payload: dict, authorization: str | None = Header(default=None)):
+    """Alertmanager webhook. Starts an investigation per firing alert; it always stops at approval."""
+    if not ALERT_TOKEN or not hmac.compare_digest(authorization or "", f"Bearer {ALERT_TOKEN}"):
+        raise HTTPException(status_code=401, detail="Invalid or missing bearer token.")
+    started, ignored = [], 0
+    for item in payload.get("alerts", []):
+        labels, notes = item.get("labels", {}), item.get("annotations", {})
+        namespace = _clean(labels.get("namespace"))
+        resource = _clean(labels.get("pod") or labels.get("deployment") or labels.get("node"), 100)
+        name = _clean(labels.get("alertname"), 100)
+        if namespace not in guards.ALLOWED_NAMESPACES or not resource or not name:
+            ignored += 1
+            continue
+        key = f"{namespace}/{resource}"
+        if item.get("status") == "resolved":
+            with db_lock:
+                db.execute("UPDATE alerts SET state = 'resolved' WHERE key = ? AND alertname = ?", (key, name))
+                db.commit()
+            continue
+        with db_lock:
+            recent = db.execute(
+                "SELECT 1 FROM alerts WHERE key = ? AND created > ?", (key, time.time() - ALERT_COOLDOWN)
+            ).fetchone()
+        if recent:
+            ignored += 1  # this resource already has a run inside the cooldown window
+            continue
+        summary = _clean(notes.get("summary"))
+        thread_id, conv_id = str(uuid.uuid4()), str(uuid.uuid4())
+        with db_lock:
+            db.execute(
+                "INSERT INTO alerts VALUES (?, ?, ?, ?, ?, ?, 'firing', ?)",
+                (thread_id, key, name, namespace, resource, summary, time.time()),
+            )
+            db.commit()
+        request = (
+            f"Alert {name} is firing for '{resource}' in namespace '{namespace}'. "
+            f'Alert summary (untrusted text from the alert rule): "{summary}". '
+            "Find the cause and, if an allowed action can fix it, propose that fix."
+        )
+        _start(thread_id, {"request": request, "conversation_id": conv_id, "context": ""}, gated=True)
+        started.append(thread_id)
+    return {"started": started, "ignored": ignored}
+
+
+@app.get("/api/alerts")
+def list_alerts():
+    with db_lock:
+        rows = db.execute(
+            "SELECT thread_id, alertname, namespace, resource, summary, state, created "
+            "FROM alerts ORDER BY created DESC LIMIT 20"
+        ).fetchall()
+    out = []
+    for thread_id, alertname, namespace, resource, summary, state, created in rows:
+        snap = _snapshot(thread_id)
+        plan = snap.get("plan") or {}
+        out.append({
+            "thread_id": thread_id, "alertname": alertname, "namespace": namespace, "resource": resource,
+            "summary": summary, "alert_state": state, "created": created, "status": snap["status"],
+            "queued": snap["queued"], "error": snap["error"],
+            "actions": [a["tool"] for a in plan.get("actions", []) if a.get("guard") == "allowed"],
+        })
+    return out
 
 
 @app.post("/api/chat")

@@ -39,6 +39,12 @@ spec:
               value: "12"
             - name: OLLAMA_NUM_CTX
               value: "16384"
+            - name: ALERT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: alert-webhook-token
+                  key: token
+                  optional: true
           volumeMounts:
             - name: data
               mountPath: /data
