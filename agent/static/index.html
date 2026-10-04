@@ -166,6 +166,8 @@ async function refreshAlerts() {
       add(row, 'span', `${r.alertname}: ${r.namespace}/${r.resource}${r.alert_state === 'resolved' ? ' (resolved)' : ''}`);
       if (r.actions.length) add(row, 'span', `proposes ${r.actions.join(', ')}`, 'badge');
       add(row, 'button', 'Open').onclick = () => openAlert(r);
+      const link = add(row, 'a', 'Graphs');
+      link.href = r.graph_url; link.target = '_blank'; link.rel = 'noopener';
     }
   } catch (e) { /* the next poll will retry */ }
 }

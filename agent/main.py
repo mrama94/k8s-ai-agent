@@ -16,6 +16,7 @@ from graph import build_graph
 from tools import guards
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+GRAFANA_URL = os.getenv("GRAFANA_URL", "http://localhost:3000")  # opened by your browser
 ALERT_TOKEN = os.getenv("ALERT_TOKEN", "")
 ALERT_COOLDOWN = int(os.getenv("ALERT_COOLDOWN_SECONDS", "900"))  # one run per resource per window
 USAGE_KEYS = ("tokens_in", "tokens_out", "llm_calls", "llm_seconds")
@@ -220,6 +221,7 @@ def list_alerts():
             "thread_id": thread_id, "alertname": alertname, "namespace": namespace, "resource": resource,
             "summary": summary, "alert_state": state, "created": created, "status": snap["status"],
             "queued": snap["queued"], "error": snap["error"],
+            "graph_url": f"{GRAFANA_URL}/d/demo-workloads?orgId=1&var-namespace={namespace}&var-pod={resource}&from=now-30m&to=now",
             "actions": [a["tool"] for a in plan.get("actions", []) if a.get("guard") == "allowed"],
         })
     return out

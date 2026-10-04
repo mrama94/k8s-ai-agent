@@ -1,5 +1,10 @@
 import json
+import os
+import re
+import time
+from typing import Literal
 
+import httpx
 from kubernetes.utils import parse_quantity
 from langchain_core.tools import tool
 
@@ -275,9 +280,56 @@ def get_metrics(namespace: str) -> str:
     })
 
 
+PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus-server.monitoring.svc:80")
+
+
+def _metric_query(metric: str, ns: str, pod: str) -> str:
+    sel = f'namespace="{ns}", pod=~"{pod}"'
+    return {
+        "memory_mib": f'sum by (pod) (container_memory_working_set_bytes{{{sel}, container!=""}}) / 1048576',
+        "memory_limit_mib": f'sum by (pod) (kube_pod_container_resource_limits{{{sel}, resource="memory"}}) / 1048576',
+        "cpu_millicores": f'sum by (pod) (rate(container_cpu_usage_seconds_total{{{sel}, container!=""}}[2m])) * 1000',
+        "restarts": f'sum by (pod) (kube_pod_container_status_restarts_total{{{sel}}})',
+        "oom_killed": f'sum by (pod) (kube_pod_container_status_last_terminated_reason{{{sel}, reason="OOMKilled"}})',
+    }[metric]
+
+
+@tool
+def get_metric_history(
+    namespace: str,
+    metric: Literal["memory_mib", "memory_limit_mib", "cpu_millicores", "restarts", "oom_killed"],
+    pod_prefix: str = "",
+    minutes: int = 30,
+) -> str:
+    """Show how a metric changed over the last minutes for pods in a namespace (from Prometheus): memory_mib, memory_limit_mib, cpu_millicores, restarts or oom_killed. Use it to compare memory use with the limit or to see whether restarts are still rising. pod_prefix filters pods by name prefix."""
+    if not re.fullmatch(r"[a-z0-9.-]{1,63}", namespace) or not re.fullmatch(r"[a-z0-9.-]{0,63}", pod_prefix):
+        return "invalid namespace or pod_prefix"
+    minutes = max(5, min(int(minutes), 180))
+    query = _metric_query(metric, namespace, re.escape(pod_prefix) + ".*")
+    end = time.time()
+    try:
+        resp = httpx.get(
+            f"{PROMETHEUS_URL}/api/v1/query_range",
+            params={"query": query, "start": end - minutes * 60, "end": end, "step": max(15, minutes * 60 // 12)},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        series = resp.json()["data"]["result"]
+    except Exception as exc:
+        return f"prometheus unavailable: {exc}"
+    if not series:
+        return "no data (pod may be too new, or the metric does not apply)"
+    out = []
+    for item in series[:10]:
+        values = [round(float(v), 1) for _, v in item["values"]]
+        out.append({"pod": item["metric"].get("pod"), "now": values[-1], "min": min(values), "max": max(values),
+                    "start": values[0], "samples": values[:: max(1, len(values) // 6)]})
+    return _j({"metric": metric, "window_minutes": minutes, "pods": out})
+
+
 READ_TOOLS = [
     list_nodes, list_pods, describe_pod, get_events, get_pod_logs,
     get_namespace_events, get_previous_logs, get_deployment, get_service,
-    describe_node, get_metrics, search_runbooks,
+    describe_node, get_metric_history, search_runbooks,
 ]
 READ_TOOL_MAP = {t.name: t for t in READ_TOOLS}

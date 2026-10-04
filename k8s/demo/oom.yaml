@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hog
+  namespace: demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hog
+  template:
+    metadata:
+      labels:
+        app: hog
+    spec:
+      containers:
+        - name: hog
+          image: polinux/stress
+          command: ["stress"]
+          args: ["--vm", "1", "--vm-bytes", "200M", "--vm-hang", "1"]
+          resources:
+            limits:
+              memory: 64Mi

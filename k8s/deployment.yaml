@@ -39,6 +39,10 @@ spec:
               value: "12"
             - name: OLLAMA_NUM_CTX
               value: "16384"
+            - name: PROMETHEUS_URL
+              value: "http://prometheus-server.monitoring.svc:80"
+            - name: GRAFANA_URL
+              value: "http://localhost:3000"
             - name: ALERT_TOKEN
               valueFrom:
                 secretKeyRef:

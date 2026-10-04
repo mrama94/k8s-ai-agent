@@ -1,0 +1,34 @@
+# Grafana, sized for a laptop kind cluster. Chart: grafana/grafana 10.5.15 (pinned in install.sh).
+testFramework:
+  enabled: false
+admin:
+  existingSecret: grafana-admin
+  userKey: admin-user
+  passwordKey: admin-password
+persistence:
+  enabled: false
+resources:
+  requests: { cpu: 25m, memory: 120Mi }
+  limits: { memory: 300Mi }
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus
+        access: proxy
+        url: http://prometheus-server.monitoring.svc:80
+        isDefault: true
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+      - name: local
+        folder: Kubernetes agent
+        type: file
+        disableDeletion: true
+        options:
+          path: /var/lib/grafana/dashboards/local
+dashboardsConfigMaps:
+  local: grafana-dashboards
