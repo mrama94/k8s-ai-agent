@@ -164,3 +164,14 @@ The Grafana password and the webhook token are generated again, and the agent's 
 - **The agent API has no login.** It is reachable only through the port-forward on your Mac. Do not expose the Service.
 - **Every change needs your approval.** The model has no write tools. The guards and RBAC limit what an approved plan can do.
 - **Lab settings only:** metrics-server runs with `--kubelet-insecure-tls`, and Prometheus and Grafana have no storage.
+
+## Logs (Loki and Alloy)
+
+Installed by `./observability/install.sh` (Loki 7.3.0 and Alloy 1.13.0, namespace `monitoring`). Alloy tails pod logs from every
+namespace through the Kubernetes API and pushes them to Loki, which keeps 6 hours (no persistence, so a Loki restart clears them).
+
+- **Grafana:** Dashboards, Kubernetes agent, Demo workloads, "Logs" panel at the bottom. Or Explore, data source Loki.
+- **Agent:** `search_logs` reads stored logs, and `get_pod_logs` falls back to Loki when the pod no longer exists.
+- **Quick check:** `kubectl -n monitoring port-forward svc/loki 3100:3100`, then
+  `curl -s -G localhost:3100/loki/api/v1/label/namespace/values`.
+- **Demo:** `kubectl apply -f k8s/demo/crash.yaml`, delete it, then ask the agent what the deleted `crasher` pod printed.

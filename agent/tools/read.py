@@ -5,6 +5,7 @@ import time
 from typing import Literal
 
 import httpx
+from kubernetes import client
 from kubernetes.utils import parse_quantity
 from langchain_core.tools import tool
 
@@ -106,6 +107,10 @@ def get_pod_logs(namespace: str, name: str, tail_lines: int = 50) -> str:
     """Get the last lines of a pod's logs."""
     try:
         return _clip(core.read_namespaced_pod_log(name, namespace, tail_lines=tail_lines))
+    except client.ApiException as exc:
+        if exc.status == 404:  # the pod is gone: stored logs may still exist
+            return "pod not found; stored logs from Loki:\n" + _loki_lines(namespace, name)
+        return f"could not read logs: {exc.reason}"
     except Exception as exc:  # a Pending pod has no logs yet
         return f"could not read logs: {exc}"
 
@@ -127,6 +132,10 @@ def get_previous_logs(namespace: str, name: str, tail_lines: int = 50) -> str:
     """Get logs from the previous, crashed instance of a pod's container. Use this for CrashLoopBackOff."""
     try:
         return _clip(core.read_namespaced_pod_log(name, namespace, previous=True, tail_lines=tail_lines))
+    except client.ApiException as exc:
+        if exc.status == 404:
+            return "pod not found; stored logs from Loki:\n" + _loki_lines(namespace, name)
+        return f"no previous logs: {exc.reason}"
     except Exception as exc:
         return f"no previous logs: {exc}"
 
@@ -327,9 +336,46 @@ def get_metric_history(
     return _j({"metric": metric, "window_minutes": minutes, "pods": out})
 
 
+LOKI_URL = os.getenv("LOKI_URL", "http://loki.monitoring.svc:3100")
+_SAFE_TEXT = re.compile(r"[A-Za-z0-9 _.:/=,@-]{0,80}")
+
+
+def _loki_lines(namespace: str, pod_prefix: str = "", text: str = "", minutes: int = 30) -> str:
+    """Query Loki with fixed templates and strictly validated inputs (never a model-written query)."""
+    if (not re.fullmatch(r"[a-z0-9.-]{1,63}", namespace) or not re.fullmatch(r"[a-z0-9.-]{0,63}", pod_prefix)
+            or not _SAFE_TEXT.fullmatch(text)):
+        return "invalid namespace, pod_prefix or text"
+    minutes = max(5, min(int(minutes), 360))
+    query = f'{{namespace="{namespace}", pod=~"{re.escape(pod_prefix)}.*"}}' + (f' |= "{text}"' if text else "")
+    end = time.time()
+    try:
+        resp = httpx.get(
+            f"{LOKI_URL}/loki/api/v1/query_range",
+            params={"query": query, "start": int((end - minutes * 60) * 1e9), "end": int(end * 1e9),
+                    "limit": 30, "direction": "backward"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        streams = resp.json()["data"]["result"]
+    except Exception as exc:
+        return f"loki unavailable: {exc}"
+    lines = sorted(
+        ((int(ts), s["stream"].get("pod"), line) for s in streams for ts, line in s["values"]), reverse=True
+    )[:30]
+    if not lines:
+        return "no matching log lines"
+    return _clip("\n".join(f"{pod}: {line[:300]}" for _, pod, line in lines))
+
+
+@tool
+def search_logs(namespace: str, pod_prefix: str = "", text: str = "", minutes: int = 30) -> str:
+    """Search stored logs (from Loki) for pods in a namespace, newest first. Works for crashed, restarted and already deleted pods, so use it for CrashLoopBackOff and for what happened before a pod went away. pod_prefix filters by pod name prefix, text keeps only lines containing that word or phrase (for example error or OOM)."""
+    return _loki_lines(namespace, pod_prefix, text, minutes)
+
+
 READ_TOOLS = [
     list_nodes, list_pods, describe_pod, get_events, get_pod_logs,
-    get_namespace_events, get_previous_logs, get_deployment, get_service,
+    get_namespace_events, search_logs, get_deployment, get_service,
     describe_node, get_metric_history, search_runbooks,
 ]
 READ_TOOL_MAP = {t.name: t for t in READ_TOOLS}

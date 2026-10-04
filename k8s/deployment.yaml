@@ -41,6 +41,8 @@ spec:
               value: "16384"
             - name: PROMETHEUS_URL
               value: "http://prometheus-server.monitoring.svc:80"
+            - name: LOKI_URL
+              value: "http://loki.monitoring.svc:3100"
             - name: GRAFANA_URL
               value: "http://localhost:3000"
             - name: ALERT_TOKEN

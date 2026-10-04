@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crasher
+  namespace: demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: crasher
+  template:
+    metadata:
+      labels:
+        app: crasher
+    spec:
+      containers:
+        - name: crasher
+          image: busybox
+          command: ["sh", "-c", "echo 'FATAL: cannot connect to database at db.internal:5432 (connection refused)'; sleep 2; exit 1"]

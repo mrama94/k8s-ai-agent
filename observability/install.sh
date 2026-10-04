@@ -18,6 +18,15 @@ helm repo add prometheus-community https://prometheus-community.github.io/helm-c
 helm upgrade --install prometheus prometheus-community/prometheus \
   --namespace monitoring --version "$CHART_VERSION" -f values.yaml --wait --timeout 5m
 
+# --- Logs (option C, phase 1): Loki + Alloy ---
+LOKI_CHART_VERSION=7.3.0
+ALLOY_CHART_VERSION=1.13.0
+helm repo add grafana https://grafana.github.io/helm-charts >/dev/null 2>&1 || true
+helm upgrade --install loki grafana/loki \
+  --namespace monitoring --version "$LOKI_CHART_VERSION" -f loki-values.yaml --wait --timeout 5m
+helm upgrade --install alloy grafana/alloy \
+  --namespace monitoring --version "$ALLOY_CHART_VERSION" -f alloy-values.yaml --wait --timeout 5m
+
 # --- Grafana (option B) ---
 GRAFANA_CHART_VERSION=10.5.15
 if ! kubectl -n monitoring get secret grafana-admin >/dev/null 2>&1; then
