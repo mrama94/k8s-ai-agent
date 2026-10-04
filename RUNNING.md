@@ -67,6 +67,9 @@ done
 
 Port-forwards stop whenever the cluster, the agent pod or your Mac restarts. Run them again after any restart.
 
+Or use the scripts: `./scripts/portforward.sh` starts the agent and Grafana forwards and restarts them if they drop;
+`./scripts/stop-portforward.sh` stops them all.
+
 ## 4. Log in to Grafana
 
 The username is `admin`. The password was generated at install time and lives only in a cluster Secret:
