@@ -214,9 +214,11 @@ agent/                      the agent (runs in the cluster)
   tools/runbooks.py         keyword search over the runbooks
   runbooks/                 team troubleshooting guides (plain Markdown)
   static/index.html         the chat and alerts page (no build step)
-k8s/                        manifests: agent Deployment, RBAC, volume, Service; k8s/demo/ has the broken workloads
-observability/              Helm values and install script for Prometheus, Alertmanager, Grafana, Loki, Alloy;
-                            demo-workloads.json is the dashboard
+apps/agent/                 Kustomize app for the agent: Deployment, RBAC, volume, Service, namespace
+platform/                   Helm values per component (prometheus, loki, alloy, grafana) and the Grafana dashboard
+demo/base/                  the demo namespace
+demo/scenarios/             the deliberately broken workloads, applied by hand for one test at a time
+bootstrap/                  kind config, bootstrap.sh (rebuilds the lab), install-platform.sh (legacy Helm install)
 scripts/                    portforward.sh and stop-portforward.sh
 RUNNING.md  TESTING.md  ARCHITECTURE.md   how to run it, what to test, this page
 ```

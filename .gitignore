@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Local files and editors
+.DS_Store
+.idea/
+.vscode/
+*.log
+.env
+.env.*
+
+# Never commit plain secrets or keys (use Sealed Secrets: only *sealed* files belong in git)
+*.key
+*.pem
+secrets/
+**/secret*.yaml
+!**/sealed-*.yaml
+!**/*sealedsecret*.yaml
+
+# Scratch output
+tmp/

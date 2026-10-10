@@ -95,7 +95,7 @@ kubectl -n ai-agent exec deploy/k8s-agent -- python -c \
 Create the demo incident, then open http://localhost:8000:
 
 ```bash
-kubectl apply -f k8s/demo/broken-pod.yaml
+kubectl apply -f demo/scenarios/broken-pod.yaml
 ```
 
 - **Chat:** send "The pod web-service in namespace demo is stuck in Pending. Can you fix it?"
@@ -107,7 +107,7 @@ Reset the incident between tests:
 ```bash
 kubectl label node agent-lab-worker type-
 kubectl -n demo delete pod web-service
-kubectl apply -f k8s/demo/broken-pod.yaml
+kubectl apply -f demo/scenarios/broken-pod.yaml
 ```
 
 Clean up the namespace between other scenarios: `kubectl -n demo delete deploy,svc,configmap --all`.
@@ -146,20 +146,14 @@ Then quit Docker Desktop if you want the memory back.
 
 ```bash
 kind delete cluster --name agent-lab
-kind create cluster --name agent-lab --config kind-config.yaml
-
-kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-kubectl -n kube-system patch deployment metrics-server --type=json \
-  -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
-
-./observability/install.sh        # Prometheus, Alertmanager, kube-state-metrics, Grafana; creates the Secrets
-
-(cd agent && docker build -t k8s-agent:local . && kind load docker-image k8s-agent:local --name agent-lab)
-kubectl apply -k k8s/
-kubectl -n ai-agent rollout status deploy/k8s-agent
+./bootstrap/bootstrap.sh
 ```
 
-The Grafana password and the webhook token are generated again, and the agent's history is lost.
+`bootstrap/bootstrap.sh` creates the cluster from `bootstrap/kind-config.yaml`, installs metrics-server (pinned), installs
+the monitoring platform (`bootstrap/install-platform.sh`, Helm values in `platform/`), builds and loads the agent image,
+and applies `demo/base` and `apps/agent`. It is safe to re-run. The Grafana password and the webhook token are generated
+again, and the agent's history is lost. (The GitOps migration, see `GITOPS-PLAN.md`, will replace most of this script
+with "install Argo CD, apply the root app".)
 
 ## Safety notes
 
@@ -170,11 +164,11 @@ The Grafana password and the webhook token are generated again, and the agent's 
 
 ## Logs (Loki and Alloy)
 
-Installed by `./observability/install.sh` (Loki 7.3.0 and Alloy 1.13.0, namespace `monitoring`). Alloy tails pod logs from every
+Installed by `./bootstrap/install-platform.sh` (Loki 7.3.0 and Alloy 1.13.0, namespace `monitoring`). Alloy tails pod logs from every
 namespace through the Kubernetes API and pushes them to Loki, which keeps 6 hours (no persistence, so a Loki restart clears them).
 
 - **Grafana:** Dashboards, Kubernetes agent, Demo workloads, "Logs" panel at the bottom. Or Explore, data source Loki.
 - **Agent:** `search_logs` reads stored logs, and `get_pod_logs` falls back to Loki when the pod no longer exists.
 - **Quick check:** `kubectl -n monitoring port-forward svc/loki 3100:3100`, then
   `curl -s -G localhost:3100/loki/api/v1/label/namespace/values`.
-- **Demo:** `kubectl apply -f k8s/demo/crash.yaml`, delete it, then ask the agent what the deleted `crasher` pod printed.
+- **Demo:** `kubectl apply -f demo/scenarios/crash.yaml`, delete it, then ask the agent what the deleted `crasher` pod printed.

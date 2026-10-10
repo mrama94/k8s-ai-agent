@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+# The one place the agent image is set. Today it is built locally and loaded with `kind load`.
+# Phase 3 changes this to ghcr.io/<owner>/k8s-agent and a real tag, written by CI.
+images:
+  - name: k8s-agent
+    newName: k8s-agent
+    newTag: local
