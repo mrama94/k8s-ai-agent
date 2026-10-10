@@ -1170,7 +1170,7 @@ kubectl get nodes                                    # wait for Ready
 Restart the port-forwards (`./scripts/portforward.sh`) and Ollama.
 
 ### F7. Full rebuild from git
-**Status:** Done (2026-10-10): 115 seconds, all apps Synced and Healthy, secret values identical, alert path working.
+**Status:** Done (2026-10-10) by hand (115 seconds, all apps Synced and Healthy, secret values identical, alert path working), and again with the `lab` command: `lab up` from nothing took 122 s and 126 s, `lab down` (key backup, forwards, delete, Ollama stop) took 3 s, and the four secret values were identical after every rebuild.
 
 **Commands to run**
 ```bash

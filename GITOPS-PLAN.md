@@ -29,6 +29,7 @@ The cluster was deleted (`kind delete cluster --name agent-lab`) and rebuilt wit
 | Prometheus | 11 alert rules loaded |
 | Alert path | A hand-broken Service raised `ServiceNoEndpoints` and reached the agent after 153 seconds |
 | Lost, as expected | Agent history and alert list (SQLite on the deleted volume), Prometheus and Loki data |
+| Repeated with the `lab` command | `lab down` then `lab up`, twice from nothing: 122 s and 126 s, same results, Ollama started by `lab up` when absent |
 
 ## Decisions
 
