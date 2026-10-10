@@ -11,5 +11,5 @@ resources:
 # Phase 3 changes this to ghcr.io/<owner>/k8s-agent and a real tag, written by CI.
 images:
   - name: k8s-agent
-    newName: k8s-agent
-    newTag: local
+    newName: ghcr.io/mrama94/k8s-agent
+    newTag: sha-da62975
