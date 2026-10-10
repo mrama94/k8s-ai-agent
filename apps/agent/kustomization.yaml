@@ -13,4 +13,4 @@ resources:
 images:
   - name: k8s-agent
     newName: ghcr.io/mrama94/k8s-agent
-    newTag: sha-da62975
+    newTag: sha-61be4d8
