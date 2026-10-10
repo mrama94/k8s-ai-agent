@@ -20,6 +20,7 @@ demo/base/        the demo namespace
 demo/scenarios/   broken workloads, applied by hand for one test
 bootstrap/        kind config, bootstrap.sh, Argo CD values, project and root app, Sealed Secrets helpers
 scripts/          port-forward helpers
+.github/workflows/ CI: builds and publishes the agent image
 ```
 
 ## Quick start

@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: agent
+  namespace: argocd
+spec:
+  project: agent
+  source:
+    repoURL: git@github.com:mrama94/k8s-ai-agent.git
+    targetRevision: main
+    path: apps/agent
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ai-agent
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions:
+      - SkipDryRunOnMissingResource=true   # the SealedSecret CRD is installed by the sealed-secrets app
+    retry:
+      limit: 10
+      backoff: { duration: 10s, factor: 2, maxDuration: 3m }

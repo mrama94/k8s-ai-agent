@@ -16,6 +16,8 @@ spec:
         app: k8s-agent
     spec:
       serviceAccountName: k8s-agent
+      imagePullSecrets:
+        - name: ghcr-pull          # sealed, see bootstrap/sealed-secrets/seal-ghcr-pull.sh
       securityContext:
         fsGroup: 10001
       containers:

@@ -152,6 +152,17 @@ Then quit Docker Desktop if you want the memory back.
 | Alert row shows `interrupted` | The agent restarted mid-run. Unfinished alert runs resume automatically at startup. |
 | No new alert row for a pod that broke again | One run per resource per 15 minutes, and Alertmanager re-sends a firing alert every hour. |
 | Nodes stay NotReady after `docker start` | Recreate the cluster (below). |
+| The agent pod is in `ImagePullBackOff` | The image pull token expired or was revoked. Make a new `read:packages` token and re-seal it (see Secrets above). A running pod is unaffected until it restarts. |
+
+## Changing the agent code
+
+1. Edit files under `agent/`, commit, and push to `main`.
+2. GitHub Actions (`.github/workflows/agent-image.yml`) builds an arm64 image, pushes it to `ghcr.io/mrama94/k8s-agent`, and
+   commits the new tag into `apps/agent/kustomization.yaml`. Watch it with `gh run watch`.
+3. Argo CD sees that commit and rolls the agent out (the agent restarts; unfinished alert runs resume).
+4. Run `git pull` afterwards, because CI added a commit to `main`.
+
+Do not edit `newName` or `newTag` in `apps/agent/kustomization.yaml` by hand. Nothing is built or loaded on this Mac any more.
 
 ## Secrets (Sealed Secrets)
 
@@ -162,6 +173,7 @@ this cluster, holding its private key, can decrypt them. Two things stay on your
 |---|---|---|
 | `~/.config/k8s-agent-lab/sealed-secrets-key.yaml` | The decryption key. Back it up again if the cluster's key changes: `./bootstrap/sealed-secrets/key.sh backup` | The sealed files in git cannot be decrypted by a rebuilt cluster. Run `./bootstrap/sealed-secrets/regenerate.sh`, commit the three new files, re-run bootstrap. |
 | `~/.config/k8s-agent-lab/argocd-deploy-key` | Lets Argo CD read the private repo | Create a new key pair and add the public half to the repo as a read-only deploy key. |
+| `~/.config/k8s-agent-lab/ghcr-read-token` | Source of the sealed image pull secret (a classic token with only `read:packages`). It expires on the date you chose. | Make a new token, save it to that file, run `./bootstrap/sealed-secrets/seal-ghcr-pull.sh`, commit the file. |
 
 To seal a new secret from a live one: `./bootstrap/sealed-secrets/seal.sh <namespace> <name> <output-file>`. Never commit a plain
 Secret manifest.
@@ -175,10 +187,10 @@ kind delete cluster --name agent-lab
 
 `bootstrap/bootstrap.sh` creates the cluster from `bootstrap/kind-config.yaml`, installs metrics-server (pinned), restores the
 Sealed Secrets key, installs Argo CD, registers the repo (read-only deploy key at `~/.config/k8s-agent-lab/argocd-deploy-key`), applies
-the root app so Argo CD pulls the monitoring platform from git, then builds and loads the agent image and applies
-`demo/base` and `apps/agent`. It is safe to re-run. The secrets come back unchanged from the sealed files in git, and the
-agent's history is lost. Argo CD reads from GitHub `main`, so the platform files must be pushed first. The agent image
-(Phase 3) is still a manual step; see `GITOPS-PLAN.md`.
+the root app so Argo CD pulls the monitoring platform from git, then applies `demo/base`; Argo CD pulls the agent
+image from `ghcr.io` and deploys `apps/agent`. It is safe to re-run. The secrets come back unchanged from the sealed files in git, and the
+agent's history is lost. Argo CD reads from GitHub `main`, so the platform files must be pushed first. Nothing is built on this Mac; the demo namespace
+(Phase 5) is the last manual piece; see `GITOPS-PLAN.md`.
 
 ## Safety notes
 

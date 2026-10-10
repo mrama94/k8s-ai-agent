@@ -1,0 +1,19 @@
+# The agent app: its own namespace, plus the Roles it needs inside demo (it fixes workloads there).
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: agent
+  namespace: argocd
+spec:
+  description: The Kubernetes troubleshooting agent and its permissions
+  sourceRepos:
+    - git@github.com:mrama94/k8s-ai-agent.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: ai-agent
+    - server: https://kubernetes.default.svc
+      namespace: demo
+  clusterResourceWhitelist:
+    - { group: "", kind: Namespace }
+    - { group: rbac.authorization.k8s.io, kind: ClusterRole }
+    - { group: rbac.authorization.k8s.io, kind: ClusterRoleBinding }
