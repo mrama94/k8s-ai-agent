@@ -1,0 +1,275 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 1190" width="1500" height="1190" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+<title>Kubernetes troubleshooting agent: architecture</title>
+<style>
+:root{--bg:#f7f9fb;--zone:#eef2f6;--zline:#b8c4d0;--ns:#ffffff;--nsline:#c9d3dd;--box:#ffffff;--boxline:#9fb0c0;--text:#17212b;--sub:#53626f;
+--blue:#2563c9;--orange:#c9741a;--green:#23895a;--grey:#6b7886;--purple:#7a4fc0;--hl:#e3efff;--hl2:#fff1df;--hl3:#e0f4ea;--hl4:#f0e8fb}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#10171d;--zone:#161f27;--zline:#33424f;--ns:#1b252e;--nsline:#34444f;--box:#202c36;--boxline:#4a5d6c;--text:#e6edf3;--sub:#9db0bf;
+--blue:#6aa4ff;--orange:#f0a050;--green:#4cc88b;--grey:#98a7b5;--purple:#b794f0;--hl:#17314f;--hl2:#4a3217;--hl3:#17402d;--hl4:#35254f}}
+:root[data-theme="dark"]{--bg:#10171d;--zone:#161f27;--zline:#33424f;--ns:#1b252e;--nsline:#34444f;--box:#202c36;--boxline:#4a5d6c;--text:#e6edf3;--sub:#9db0bf;
+--blue:#6aa4ff;--orange:#f0a050;--green:#4cc88b;--grey:#98a7b5;--purple:#b794f0;--hl:#17314f;--hl2:#4a3217;--hl3:#17402d;--hl4:#35254f}
+.bg{fill:var(--bg)}
+.zone{fill:var(--zone);stroke:var(--zline);stroke-width:1.5;stroke-dasharray:6 4}
+.kind{fill:var(--zone);stroke:var(--zline);stroke-width:2}
+.ns{fill:var(--ns);stroke:var(--nsline);stroke-width:1.5}
+.box{fill:var(--box);stroke:var(--boxline);stroke-width:1.4}
+.boxb{fill:var(--hl);stroke:var(--blue);stroke-width:1.6}
+.boxo{fill:var(--hl2);stroke:var(--orange);stroke-width:1.6}
+.boxg{fill:var(--hl3);stroke:var(--green);stroke-width:1.6}
+.boxp{fill:var(--hl4);stroke:var(--purple);stroke-width:1.6}
+.title{font-size:26px;font-weight:700;fill:var(--text)}
+.subtitle{font-size:14px;fill:var(--sub)}
+.zl{font-size:13px;font-weight:700;fill:var(--sub);letter-spacing:.06em}
+.nl{font-size:12px;font-weight:700;fill:var(--sub)}
+.bt{font-size:13.5px;font-weight:700;fill:var(--text)}
+.st{font-size:11.5px;fill:var(--sub)}
+.t{font-size:12px;fill:var(--text)}
+.chip{fill:var(--box);stroke:var(--boxline);stroke-width:1}
+.chipt{font-size:10px;font-weight:600;fill:var(--text)}
+.flow{fill:none;stroke-width:2.4}
+.flow.dash{stroke-dasharray:7 5}
+.flow.blue{stroke:var(--blue)}.flow.orange{stroke:var(--orange)}.flow.green{stroke:var(--green)}.flow.grey{stroke:var(--grey)}.flow.purple{stroke:var(--purple)}
+.badge.blue{fill:var(--blue)}.badge.orange{fill:var(--orange)}.badge.green{fill:var(--green)}.badge.grey{fill:var(--grey)}.badge.purple{fill:var(--purple)}
+.bn{font-size:12px;font-weight:700;fill:#fff}
+.fl{font-size:11.5px;font-weight:600}
+.fl.blue{fill:var(--blue)}.fl.orange{fill:var(--orange)}.fl.green{fill:var(--green)}.fl.grey{fill:var(--grey)}.fl.purple{fill:var(--purple)}
+.lg{font-size:12.5px;fill:var(--text)}
+.lgh{font-size:13px;font-weight:700;fill:var(--text)}
+</style>
+<defs>
+<marker id="a-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--blue)"/></marker>
+<marker id="a-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--orange)"/></marker>
+<marker id="a-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--green)"/></marker>
+<marker id="a-grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--grey)"/></marker>
+<marker id="a-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--purple)"/></marker>
+</defs>
+<rect width="1500" height="1190" class="bg"/>
+<text x="24" y="34" class="title" text-anchor="start">Kubernetes troubleshooting agent: architecture</text>
+<text x="24" y="56" class="subtitle" text-anchor="start">An AI agent that investigates, proposes and (after approval) fixes problems in a cluster. Everything runs on one Mac; Git is the source of truth.</text>
+<rect x="20" y="96" width="236" height="880" rx="12" class="zone"/>
+<text x="34" y="118" class="zl" text-anchor="start">YOU</text>
+<rect x="36" y="126" width="204" height="96" rx="8" class="boxb"/>
+<text x="48" y="146" class="bt" text-anchor="start">You, the developer</text>
+<text x="48" y="163" class="st" text-anchor="start">edit, commit, push to GitHub</text>
+<text x="48" y="178" class="st" text-anchor="start">approve or reject agent plans</text>
+<rect x="36" y="246" width="204" height="112" rx="8" class="boxb"/>
+<text x="48" y="266" class="bt" text-anchor="start">Browser</text>
+<text x="48" y="283" class="st" text-anchor="start">Agent chat and alerts  :8000</text>
+<text x="48" y="298" class="st" text-anchor="start">Grafana  :3000</text>
+<text x="48" y="313" class="st" text-anchor="start">Argo CD  :8080</text>
+<rect x="36" y="382" width="204" height="112" rx="8" class="box"/>
+<text x="48" y="402" class="bt" text-anchor="start">lab CLI</text>
+<text x="48" y="419" class="st" text-anchor="start">lab up | down | stop | start</text>
+<text x="48" y="434" class="st" text-anchor="start">lab status | doctor | forward</text>
+<text x="48" y="449" class="st" text-anchor="start">wraps bootstrap.sh</text>
+<rect x="36" y="518" width="204" height="150" rx="8" class="boxp"/>
+<text x="48" y="538" class="bt" text-anchor="start">Kept on your Mac, not in Git</text>
+<text x="48" y="555" class="st" text-anchor="start">Argo CD deploy key (read-only)</text>
+<text x="48" y="570" class="st" text-anchor="start">Sealing key backup</text>
+<text x="48" y="585" class="st" text-anchor="start">Image pull token (source)</text>
+<text x="48" y="600" class="st" text-anchor="start">~/.config/k8s-agent-lab/</text>
+<rect x="280" y="96" width="910" height="880" rx="12" class="zone"/>
+<text x="294" y="118" class="zl" text-anchor="start">YOUR MAC  (Apple Silicon)</text>
+<rect x="312" y="128" width="266" height="66" rx="8" class="box"/>
+<text x="324" y="148" class="bt" text-anchor="start">kubectl port-forward</text>
+<text x="324" y="165" class="st" text-anchor="start">auto-restarting  (scripts/portforward.sh)</text>
+<rect x="852" y="128" width="306" height="82" rx="8" class="boxb"/>
+<text x="864" y="148" class="bt" text-anchor="start">Ollama  +  qwen2.5:7b</text>
+<text x="864" y="165" class="st" text-anchor="start">the model; runs on the Mac's GPU, outside the</text>
+<text x="864" y="180" class="st" text-anchor="start">cluster. One server, :11434</text>
+<rect x="298" y="236" width="876" height="722" rx="12" class="kind"/>
+<text x="312" y="258" class="zl" text-anchor="start">kind cluster  agent-lab  (Docker)</text>
+<rect x="312" y="272" width="220" height="232" rx="10" class="ns"/>
+<text x="324" y="292" class="nl" text-anchor="start">namespace  demo</text>
+<rect x="326" y="304" width="192" height="74" rx="8" class="boxg"/>
+<text x="338" y="324" class="bt" text-anchor="start">storefront</text>
+<text x="338" y="340" class="st" text-anchor="start">healthy, owned by Git</text>
+<text x="338" y="354" class="st" text-anchor="start">(Argo CD: manual sync)</text>
+<rect x="326" y="392" width="192" height="100" rx="8" class="box"/>
+<text x="338" y="412" class="bt" text-anchor="start">Test workloads</text>
+<text x="338" y="428" class="st" text-anchor="start">broken on purpose, one</text>
+<text x="338" y="442" class="st" text-anchor="start">by one; the agent fixes</text>
+<text x="338" y="456" class="st" text-anchor="start">them live; Argo CD shows</text>
+<text x="338" y="470" class="st" text-anchor="start">the drift, never reverts it</text>
+<rect x="568" y="272" width="300" height="340" rx="10" class="ns"/>
+<text x="580" y="292" class="nl" text-anchor="start">namespace  ai-agent</text>
+<rect x="580" y="302" width="276" height="196" rx="8" class="boxb"/>
+<text x="592" y="322" class="bt" text-anchor="start">The agent  (FastAPI + LangGraph)</text>
+<rect x="592" y="334" width="68" height="22" rx="5" class="chip"/>
+<text x="626.0" y="349" class="chipt" text-anchor="middle">Investigate</text>
+<rect x="662" y="334" width="50" height="22" rx="5" class="chip"/>
+<text x="687.0" y="349" class="chipt" text-anchor="middle">Propose</text>
+<rect x="714" y="334" width="50" height="22" rx="5" class="chip"/>
+<text x="739.0" y="349" class="chipt" text-anchor="middle">Approve</text>
+<rect x="766" y="334" width="38" height="22" rx="5" class="chip"/>
+<text x="785.0" y="349" class="chipt" text-anchor="middle">Apply</text>
+<rect x="806" y="334" width="40" height="22" rx="5" class="chip"/>
+<text x="826.0" y="349" class="chipt" text-anchor="middle">Verify</text>
+<text x="592" y="378" class="st" text-anchor="start">12 read-only tools  (pods, events, logs,</text>
+<text x="592" y="394" class="st" text-anchor="start">metrics, objects, runbooks)</text>
+<text x="592" y="410" class="st" text-anchor="start">7 write actions, only after you approve</text>
+<text x="592" y="426" class="st" text-anchor="start">Guards in code  +  RBAC in Kubernetes</text>
+<text x="592" y="442" class="st" text-anchor="start">Code (not the model) verifies the fix</text>
+<text x="592" y="470" class="st" text-anchor="start">Alert runs queue: one at a time</text>
+<rect x="580" y="512" width="124" height="86" rx="8" class="box"/>
+<text x="592" y="532" class="bt" text-anchor="start">SQLite</text>
+<text x="592" y="548" class="st" text-anchor="start">on a volume:</text>
+<text x="592" y="562" class="st" text-anchor="start">runs, summaries,</text>
+<text x="592" y="576" class="st" text-anchor="start">alert list</text>
+<rect x="732" y="512" width="124" height="86" rx="8" class="boxp"/>
+<text x="744" y="532" class="bt" text-anchor="start">Sealed Secrets</text>
+<text x="744" y="548" class="st" text-anchor="start">webhook token</text>
+<text x="744" y="562" class="st" text-anchor="start">image pull</text>
+<text x="744" y="576" class="st" text-anchor="start">credential</text>
+<rect x="904" y="272" width="256" height="232" rx="10" class="ns"/>
+<text x="916" y="292" class="nl" text-anchor="start">namespace  argocd</text>
+<rect x="916" y="302" width="232" height="190" rx="8" class="boxg"/>
+<text x="928" y="322" class="bt" text-anchor="start">Argo CD  (slimmed)</text>
+<text x="928" y="342" class="st" text-anchor="start">reads Git every few minutes</text>
+<text x="928" y="359" class="st" text-anchor="start">root app lists the apps:</text>
+<text x="928" y="376" class="st" text-anchor="start">platform, secrets, sealed-secrets,</text>
+<text x="928" y="393" class="st" text-anchor="start">agent  :  auto-sync + self-heal</text>
+<text x="928" y="410" class="st" text-anchor="start">demo  :  manual sync, no self-heal</text>
+<text x="928" y="427" class="st" text-anchor="start">(drift shown, never undone)</text>
+<rect x="312" y="522" width="220" height="104" rx="10" class="ns"/>
+<text x="324" y="542" class="nl" text-anchor="start">namespace  kube-system</text>
+<rect x="326" y="552" width="192" height="62" rx="8" class="box"/>
+<text x="338" y="572" class="bt" text-anchor="start">API server  +  RBAC</text>
+<text x="338" y="588" class="st" text-anchor="start">RBAC: the hard limit</text>
+<text x="338" y="602" class="st" text-anchor="start">metrics-server</text>
+<rect x="904" y="522" width="256" height="104" rx="10" class="ns"/>
+<text x="916" y="542" class="nl" text-anchor="start">namespace  sealed-secrets</text>
+<rect x="916" y="552" width="232" height="62" rx="8" class="boxp"/>
+<text x="928" y="572" class="bt" text-anchor="start">Sealed Secrets controller</text>
+<text x="928" y="588" class="st" text-anchor="start">decrypts Git's encrypted files</text>
+<text x="928" y="602" class="st" text-anchor="start">into ordinary Secrets</text>
+<rect x="312" y="652" width="848" height="290" rx="10" class="ns"/>
+<text x="324" y="672" class="nl" text-anchor="start">namespace  monitoring</text>
+<rect x="330" y="690" width="150" height="66" rx="8" class="box"/>
+<text x="342" y="710" class="bt" text-anchor="start">kube-state-metrics</text>
+<text x="342" y="726" class="st" text-anchor="start">turns object state</text>
+<text x="342" y="740" class="st" text-anchor="start">into metrics</text>
+<rect x="512" y="690" width="180" height="66" rx="8" class="box"/>
+<text x="524" y="710" class="bt" text-anchor="start">Prometheus</text>
+<text x="524" y="726" class="st" text-anchor="start">scrapes every 30 s</text>
+<text x="524" y="740" class="st" text-anchor="start">alert rules, 6 h of data</text>
+<rect x="724" y="690" width="170" height="66" rx="8" class="boxo"/>
+<text x="736" y="710" class="bt" text-anchor="start">Alertmanager</text>
+<text x="736" y="726" class="st" text-anchor="start">groups alerts, sends</text>
+<text x="736" y="740" class="st" text-anchor="start">a webhook to the agent</text>
+<rect x="330" y="800" width="150" height="66" rx="8" class="box"/>
+<text x="342" y="820" class="bt" text-anchor="start">Alloy</text>
+<text x="342" y="836" class="st" text-anchor="start">tails every pod's logs</text>
+<text x="342" y="850" class="st" text-anchor="start">through the API</text>
+<rect x="512" y="800" width="180" height="66" rx="8" class="box"/>
+<text x="524" y="820" class="bt" text-anchor="start">Loki</text>
+<text x="524" y="836" class="st" text-anchor="start">stored logs, 6 h</text>
+<text x="524" y="850" class="st" text-anchor="start">(incl. deleted pods)</text>
+<rect x="724" y="800" width="170" height="66" rx="8" class="box"/>
+<text x="736" y="820" class="bt" text-anchor="start">Grafana</text>
+<text x="736" y="836" class="st" text-anchor="start">dashboard + alert</text>
+<text x="736" y="850" class="st" text-anchor="start">history + logs panel</text>
+<rect x="926" y="690" width="220" height="176" rx="8" class="box"/>
+<text x="938" y="710" class="bt" text-anchor="start">Alert rules cover</text>
+<text x="938" y="727" class="st" text-anchor="start">Pending, CrashLoop, ImagePull,</text>
+<text x="938" y="742" class="st" text-anchor="start">not ready, replicas missing,</text>
+<text x="938" y="757" class="st" text-anchor="start">scaled to zero, no endpoints,</text>
+<text x="938" y="772" class="st" text-anchor="start">StatefulSets, DaemonSets,</text>
+<text x="938" y="787" class="st" text-anchor="start">failed Jobs, suspended CronJobs</text>
+<text x="330" y="912" class="st" text-anchor="start">No persistent storage here: Prometheus and Loki start empty after a rebuild.</text>
+<rect x="1220" y="96" width="262" height="880" rx="12" class="zone"/>
+<text x="1234" y="118" class="zl" text-anchor="start">GITHUB</text>
+<rect x="1236" y="128" width="230" height="132" rx="8" class="boxg"/>
+<text x="1248" y="148" class="bt" text-anchor="start">Repository  (private)</text>
+<text x="1248" y="165" class="st" text-anchor="start">main branch</text>
+<text x="1248" y="180" class="st" text-anchor="start">agent/   apps/   platform/</text>
+<text x="1248" y="195" class="st" text-anchor="start">demo/   bootstrap/   scripts/</text>
+<text x="1248" y="210" class="st" text-anchor="start">encrypted secrets only</text>
+<rect x="1236" y="304" width="230" height="176" rx="8" class="boxg"/>
+<text x="1248" y="324" class="bt" text-anchor="start">GitHub Actions</text>
+<text x="1248" y="341" class="st" text-anchor="start">ci: unit tests, lint,</text>
+<text x="1248" y="356" class="st" text-anchor="start">secret scan, manifest and</text>
+<text x="1248" y="371" class="st" text-anchor="start">Helm schema checks</text>
+<text x="1248" y="386" class="st" text-anchor="start">agent-image: tests first, then</text>
+<text x="1248" y="401" class="st" text-anchor="start">build arm64, push, commit tag</text>
+<rect x="1236" y="524" width="230" height="96" rx="8" class="boxg"/>
+<text x="1248" y="544" class="bt" text-anchor="start">ghcr.io  (private)</text>
+<text x="1248" y="561" class="st" text-anchor="start">k8s-agent:sha-xxxxxxx</text>
+<text x="1248" y="576" class="st" text-anchor="start">pulled with a sealed token</text>
+<path d="M 240 300 H 262 V 161 H 312" class="flow blue" marker-end="url(#a-blue)"/>
+<circle cx="262" cy="232" r="11" class="badge blue"/>
+<text x="262" y="236" class="bn" text-anchor="middle">1</text>
+<path d="M 578 161 H 730 V 302" class="flow blue" marker-end="url(#a-blue)"/>
+<text x="594" y="152" class="fl blue" text-anchor="start">chat, approve, reject</text>
+<path d="M 800 302 V 244 H 1005 V 212" class="flow blue" marker-end="url(#a-blue)"/>
+<circle cx="900" cy="244" r="11" class="badge blue"/>
+<text x="900" y="248" class="bn" text-anchor="middle">2</text>
+<text x="1015" y="232" class="fl blue" text-anchor="start">prompts and answers</text>
+<path d="M 580 430 H 542 V 584 H 520" class="flow blue" marker-end="url(#a-blue)"/>
+<circle cx="542" cy="470" r="11" class="badge blue"/>
+<text x="542" y="474" class="bn" text-anchor="middle">3</text>
+<path d="M 480 723 H 510" class="flow orange" marker-end="url(#a-orange)"/>
+<path d="M 692 723 H 722" class="flow orange" marker-end="url(#a-orange)"/>
+<path d="M 809 690 V 650 H 718 V 500" class="flow orange" marker-end="url(#a-orange)"/>
+<circle cx="764" cy="650" r="11" class="badge orange"/>
+<text x="764" y="654" class="bn" text-anchor="middle">4</text>
+<text x="820" y="680" class="fl orange" text-anchor="start">webhook to the agent</text>
+<path d="M 580 400 H 558 V 652 H 602 V 688" class="flow grey dash" marker-end="url(#a-grey)"/>
+<circle cx="558" cy="620" r="11" class="badge grey"/>
+<text x="558" y="624" class="bn" text-anchor="middle">5</text>
+<path d="M 480 833 H 510" class="flow grey" marker-end="url(#a-grey)"/>
+<path d="M 722 833 H 694" class="flow grey" marker-end="url(#a-grey)"/>
+<path d="M 760 800 L 690 758" class="flow grey" marker-end="url(#a-grey)"/>
+<path d="M 916 584 H 886 V 556 H 860" class="flow purple" marker-end="url(#a-purple)"/>
+<circle cx="886" cy="584" r="11" class="badge purple"/>
+<text x="886" y="588" class="bn" text-anchor="middle">9</text>
+<path d="M 1236 205 H 1204 V 400 H 1150" class="flow green" marker-end="url(#a-green)"/>
+<circle cx="1204" cy="300" r="11" class="badge green"/>
+<text x="1204" y="304" class="bn" text-anchor="middle">7</text>
+<path d="M 916 420 H 872" class="flow green dash" marker-end="url(#a-green)"/>
+<text x="894" y="412" class="fl green" text-anchor="middle">applies</text>
+<path d="M 138 126 V 82 H 1351 V 126" class="flow green" marker-end="url(#a-green)"/>
+<circle cx="520" cy="82" r="11" class="badge green"/>
+<text x="520" y="86" class="bn" text-anchor="middle">6</text>
+<text x="540" y="77" class="fl green" text-anchor="start">git push</text>
+<path d="M 1320 262 V 302" class="flow green" marker-end="url(#a-green)"/>
+<path d="M 1320 482 V 522" class="flow green" marker-end="url(#a-green)"/>
+<path d="M 1452 392 H 1472 V 196 H 1468" class="flow green dash" marker-end="url(#a-green)"/>
+<text x="1328" y="288" class="fl green" text-anchor="start">push triggers CI</text>
+<path d="M 1236 580 H 1180" class="flow green" marker-end="url(#a-green)"/>
+<circle cx="1208" cy="580" r="11" class="badge green"/>
+<text x="1208" y="584" class="bn" text-anchor="middle">8</text>
+<path d="M 240 438 H 296" class="flow grey dash" marker-end="url(#a-grey)"/>
+<rect x="20" y="986" width="1462" height="176" rx="10" class="zone" style="stroke-dasharray:none"/>
+<text x="34" y="1006" class="lgh" text-anchor="start">How to read it</text>
+<circle cx="43" cy="1024" r="9" class="badge blue"/>
+<text x="43" y="1028" class="bn" text-anchor="middle">1</text>
+<text x="60" y="1028" class="lg" text-anchor="start">You chat in the browser; a port-forward reaches the agent.</text>
+<circle cx="43" cy="1046" r="9" class="badge blue"/>
+<text x="43" y="1050" class="bn" text-anchor="middle">2</text>
+<text x="60" y="1050" class="lg" text-anchor="start">The agent asks the local model what it thinks.</text>
+<circle cx="43" cy="1068" r="9" class="badge blue"/>
+<text x="43" y="1072" class="bn" text-anchor="middle">3</text>
+<text x="60" y="1072" class="lg" text-anchor="start">The agent reads the cluster; after approval it patches the</text>
+<text x="60" y="1087" class="lg" text-anchor="start">demo namespace only.</text>
+<circle cx="523" cy="1024" r="9" class="badge orange"/>
+<text x="523" y="1028" class="bn" text-anchor="middle">4</text>
+<text x="540" y="1028" class="lg" text-anchor="start">Prometheus sees a problem; Alertmanager sends a webhook; the</text>
+<text x="540" y="1043" class="lg" text-anchor="start">agent investigates and stops at approval.</text>
+<circle cx="523" cy="1061" r="9" class="badge grey"/>
+<text x="523" y="1065" class="bn" text-anchor="middle">5</text>
+<text x="540" y="1065" class="lg" text-anchor="start">The agent looks up metric history and stored logs.</text>
+<circle cx="1003" cy="1024" r="9" class="badge green"/>
+<text x="1003" y="1028" class="bn" text-anchor="middle">6</text>
+<text x="1020" y="1028" class="lg" text-anchor="start">You push; Actions test, build the image, push it and commit</text>
+<text x="1020" y="1043" class="lg" text-anchor="start">the new tag.</text>
+<circle cx="1003" cy="1061" r="9" class="badge green"/>
+<text x="1003" y="1065" class="bn" text-anchor="middle">7</text>
+<text x="1020" y="1065" class="lg" text-anchor="start">Argo CD pulls Git and applies it. Secrets arrive encrypted.</text>
+<circle cx="1003" cy="1083" r="9" class="badge green"/>
+<text x="1003" y="1087" class="bn" text-anchor="middle">8</text>
+<text x="1020" y="1087" class="lg" text-anchor="start">The nodes pull the private image.</text>
+<circle cx="1003" cy="1105" r="9" class="badge purple"/>
+<text x="1003" y="1109" class="bn" text-anchor="middle">9</text>
+<text x="1020" y="1109" class="lg" text-anchor="start">The controller decrypts sealed secrets (needs the key kept</text>
+<text x="1020" y="1124" class="lg" text-anchor="start">on your Mac).</text>
+</svg>

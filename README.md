@@ -5,10 +5,12 @@ Runs entirely on one Mac: Ollama (qwen2.5:7b), a kind cluster, and a Prometheus,
 
 | Read | For |
 |---|---|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | How it works, in plain terms |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | How it works, in plain terms, with the [architecture diagram](docs/architecture-diagram.svg) |
 | [RUNNING.md](RUNNING.md) | Start, expose, stop, troubleshoot |
 | [TESTING.md](TESTING.md) | Test scenarios with commands, expected behaviour, expected fix and clean-up |
 | [GITOPS-PLAN.md](GITOPS-PLAN.md) | The plan for moving the cluster to GitOps (Argo CD) |
+
+![Architecture diagram](docs/architecture-diagram.svg)
 
 ## Layout
 
