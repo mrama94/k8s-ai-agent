@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt constraints.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -c constraints.txt
 COPY . .
 RUN useradd -u 10001 -m agent && mkdir -p /data && chown agent /data
 USER 10001
