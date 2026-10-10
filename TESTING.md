@@ -474,6 +474,92 @@ kubectl -n demo delete daemonset agentd
 
 ---
 
+## H. GitOps: drift is shown, never silently undone
+
+The `demo` namespace is an Argo CD app (`demo`) that holds a healthy workload, `storefront`, from `demo/base`. It has **no
+automatic sync and no self-heal**, so an approved fix is never reverted. Argo CD shows drift as `OutOfSync`. See what differs
+at any time with `./scripts/gitops-status.sh`, or in the Argo CD UI (http://localhost:8080).
+
+### H1. A live break shows as drift and is not reverted; the agent's fix brings it back in line
+**Status:** Not run
+
+**Commands to run**
+```bash
+./scripts/gitops-status.sh                       # demo is Synced and Healthy
+kubectl -n demo patch svc storefront --type merge -p '{"spec":{"selector":{"app":"storefrnt"}}}'
+sleep 120
+./scripts/gitops-status.sh                       # demo is OutOfSync: Service demo/storefront differs from git
+kubectl -n demo get endpoints storefront         # <none>
+sleep 180
+kubectl -n demo get svc storefront -o jsonpath='{.spec.selector}'; echo      # still the typo: nothing reverted it
+```
+Ask: `Requests to the storefront service in namespace demo are failing. Find out why and fix it.` (or wait about 2 minutes
+for the `ServiceNoEndpoints` alert to start a run).
+
+**Expected faulty behaviour**
+- The Service has no endpoints. `gitops-status.sh` lists `Service demo/storefront` as differing from git.
+- Argo CD does **not** correct it, even after several minutes.
+
+**Expected fix from the agent**
+- Diagnosis: selector `storefrnt` does not match the pods' label `storefront`.
+- Plan: `patch_resource` on `Service` `storefront`, preview `spec.selector.app: storefrnt -> storefront`.
+- After Approve: endpoints return, and `./scripts/gitops-status.sh` shows `demo` **Synced** again, because the fix is
+  identical to what git holds.
+
+**Clean up**
+None if the agent fixed it. Otherwise put git's version back:
+`kubectl -n argocd patch application demo --type merge -p '{"operation":{"sync":{}}}'`
+
+### H2. A fix that differs from git stays as visible drift until a person decides
+**Status:** Not run
+
+**Commands to run**
+```bash
+kubectl -n demo patch deploy storefront --type strategic -p \
+  '{"spec":{"template":{"spec":{"containers":[{"name":"web","resources":{"limits":{"memory":"4Mi"}}}]}}}}'
+sleep 90
+kubectl -n demo get pods -l app=storefront       # OOMKilled / CrashLoopBackOff
+```
+Ask: `The storefront deployment in namespace demo keeps restarting. Find out why and fix it.`
+
+**Expected faulty behaviour**
+- New pods are killed with `OOMKilled` (limit 4Mi); `PodCrashLooping` and `DeploymentReplicasUnavailable` fire.
+
+**Expected fix from the agent**
+- Diagnosis: OOMKilled, the memory limit is far too low.
+- Plan: `patch_resource` on `Deployment` `storefront` raising `containers[web].resources.limits.memory` (git says 64Mi; any
+  value from about 32Mi up is a sound fix).
+- After Approve: pods are Running. `./scripts/gitops-status.sh` shows `Deployment demo/storefront` **OutOfSync** if the new
+  value is not 64Mi: git still holds the old number. The fix is **not** reverted. To keep the agent's value, change it in
+  `demo/base/storefront.yaml`, commit and push, then sync; to discard it, sync (git's 64Mi returns).
+
+**Clean up**
+```bash
+kubectl -n argocd patch application demo --type merge -p '{"operation":{"sync":{}}}'
+./scripts/gitops-status.sh                       # demo Synced again
+```
+
+### H3. The platform still heals itself
+**Status:** Done once (Grafana scaled to 0 came back within about 3 seconds)
+
+**Commands to run**
+```bash
+kubectl -n monitoring scale deploy grafana --replicas=0
+sleep 10
+kubectl -n monitoring get deploy grafana -o jsonpath='{.spec.replicas}'; echo
+```
+
+**Expected faulty behaviour**
+- A manual change to a platform object.
+
+**Expected fix from the agent**
+- Not the agent: Argo CD reverts it (auto-heal is on for every app except `demo`). The command above prints `1`.
+
+**Clean up**
+None.
+
+---
+
 ## C. Safety: guards, RBAC, prompt injection, approval
 
 ### C1. Namespace guard
@@ -1087,6 +1173,6 @@ Restart the port-forwards (`./scripts/portforward.sh`) and Ollama.
 
 ## Suggested first pass
 
-A3, A5, A6, A7 (remaining original fix actions), then G1 to G5 (the new object kinds), then C1, C3, C7, C10 to C12, then B4, C6, D2, F2.
+A3, A5, A6, A7 (remaining original fix actions), then H1 and H2 (GitOps drift), then G1 to G5 (the new object kinds), then C1, C3, C7, C10 to C12, then B4, C6, D2, F2.
 For each run record: did the diagnosis name the right cause, was the plan the expected one, and the calls and seconds
 shown in the usage bar. Re-run the same list after every prompt, tool or model change.

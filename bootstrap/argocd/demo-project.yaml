@@ -1,0 +1,16 @@
+# The demo namespace: where the agent is allowed to fix things. Kept apart from the platform and the agent so that its
+# different sync rules (no auto-sync, no auto-heal) cannot leak into them.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: demo
+  namespace: argocd
+spec:
+  description: Workloads the agent investigates and fixes
+  sourceRepos:
+    - git@github.com:mrama94/k8s-ai-agent.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: demo
+  clusterResourceWhitelist:
+    - { group: "", kind: Namespace }

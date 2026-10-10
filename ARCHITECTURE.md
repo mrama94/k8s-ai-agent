@@ -198,6 +198,35 @@ Prometheus and Loki have no persistent storage here, so their history resets if 
 A **conversation** is just a shared id. Each message still runs as its own clean run, with short summaries of earlier
 messages added as background.
 
+## How changes reach the cluster (GitOps)
+
+Git is the source of truth. A tool called **Argo CD** runs in the cluster, watches this repository, and makes the cluster
+match it.
+
+```
+ you push to main ──► GitHub Actions: tests, checks, builds the agent image ──► tag committed to git
+                                     │
+                    Argo CD (in the cluster) reads git every few minutes
+                                     │
+        ┌────────────┬───────────────┼────────────────┬──────────────────────┐
+     platform      secrets          agent            demo                  (root app lists them all)
+   monitoring    encrypted      the agent         the namespace the
+   stack         files          + its image       agent fixes
+   auto-sync     auto-sync      auto-sync         NO auto-sync, NO self-heal
+   self-heals    self-heals     self-heals        (drift is shown, not undone)
+```
+
+| Rule | Why |
+|---|---|
+| Platform, secrets and the agent **self-heal**: a manual change is reverted within seconds | Nobody should be able to change them by hand and forget |
+| `demo` has **no auto-sync and no self-heal** | The agent fixes live objects there. An automatic sync would silently undo an approved fix |
+| In `demo`, a live change shows as **OutOfSync**; a person decides to copy it into git or to put git's version back | The fix and the record stay in step, with a human choosing |
+| Secrets are committed only as encrypted **SealedSecret** files | Git can hold them safely. The decryption key stays on one Mac, outside git |
+| The agent image is built by CI and pulled from a private registry with a sealed credential | Nothing is built or loaded by hand |
+| CI must pass (tests, lint, secret scan, manifest and chart validation) before an image is built | A broken change never becomes a running pod |
+
+One command, `bootstrap/bootstrap.sh`, rebuilds all of it from git.
+
 ## Where things live in the repo
 
 ```
@@ -216,7 +245,7 @@ agent/                      the agent (runs in the cluster)
   static/index.html         the chat and alerts page (no build step)
 apps/agent/                 Kustomize app for the agent: Deployment, RBAC, volume, Service, namespace
 platform/                   Helm values per component (prometheus, loki, alloy, grafana) and the Grafana dashboard
-demo/base/                  the demo namespace
+demo/base/                  the demo namespace and a healthy workload that git owns
 demo/scenarios/             the deliberately broken workloads, applied by hand for one test at a time
 bootstrap/                  kind config, bootstrap.sh (rebuilds the lab), Argo CD values, project and root app
 scripts/                    portforward.sh and stop-portforward.sh

@@ -1,0 +1,18 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: demo
+  namespace: argocd
+spec:
+  project: demo
+  source:
+    repoURL: git@github.com:mrama94/k8s-ai-agent.git
+    targetRevision: main
+    path: demo/base
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo
+  # No syncPolicy.automated, on purpose. The agent fixes live objects in this namespace, and an automatic sync (or
+  # self-heal) would silently undo an approved fix. Instead Argo CD reports drift as OutOfSync and a person decides:
+  # copy the fix into git and sync, or sync to put git's version back. Sync with the Argo CD UI, or:
+  #   kubectl -n argocd patch application demo --type merge -p '{"operation":{"sync":{}}}'

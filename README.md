@@ -16,7 +16,7 @@ Runs entirely on one Mac: Ollama (qwen2.5:7b), a kind cluster, and a Prometheus,
 agent/            the agent's source code and Dockerfile
 apps/agent/       Kustomize app for the agent (the image is set in kustomization.yaml)
 platform/         Argo CD Applications (platform/apps) and Helm values for Prometheus, Loki, Alloy, Grafana; the Grafana dashboard
-demo/base/        the demo namespace
+demo/base/        the demo namespace and a healthy workload (storefront) that git owns
 demo/scenarios/   broken workloads, applied by hand for one test
 bootstrap/        kind config, bootstrap.sh, Argo CD values, project and root app, Sealed Secrets helpers
 scripts/          port-forward helpers; scripts/ci/ holds the checks CI runs

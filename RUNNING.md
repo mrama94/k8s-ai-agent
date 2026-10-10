@@ -154,6 +154,21 @@ Then quit Docker Desktop if you want the memory back.
 | Nodes stay NotReady after `docker start` | Recreate the cluster (below). |
 | The agent pod is in `ImagePullBackOff` | The image pull token expired or was revoked. Make a new `read:packages` token and re-seal it (see Secrets above). A running pod is unaffected until it restarts. |
 
+## GitOps status and drift
+
+```bash
+./scripts/gitops-status.sh     # every Argo CD app, plus the objects that differ from git
+```
+
+Every app auto-syncs and self-heals **except `demo`**: the agent fixes live objects there, and an automatic sync would undo an
+approved fix. `demo` shows drift as `OutOfSync` and waits for you. To put git's version back (or to apply a git change):
+
+```bash
+kubectl -n argocd patch application demo --type merge -p '{"operation":{"sync":{}}}'
+```
+
+To keep an agent fix, copy it into `demo/base/`, commit and push, then sync. See TESTING.md section H.
+
 ## Running the checks
 
 CI runs the scripts in `scripts/ci/`; you can run the same ones before pushing.

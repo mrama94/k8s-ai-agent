@@ -2,7 +2,8 @@
 # Rebuilds the whole lab from this repository: cluster, Argo CD, and everything Argo CD then pulls from git.
 #
 # Phase 3 version: platform, secrets and the agent all come from git through Argo CD. The agent image is pulled from
-# ghcr.io (built by GitHub Actions); nothing is built or loaded locally. Still manual: the demo namespace (Phase 5).
+# ghcr.io (built by GitHub Actions); nothing is built or loaded locally. The demo namespace is an Argo CD app with manual
+# sync (so approved fixes are never undone); this script gives it its first sync.
 #
 # Needs, outside git:
 #   ~/.config/k8s-agent-lab/argocd-deploy-key          read-only deploy key so Argo CD can read the private repo
@@ -49,7 +50,7 @@ helm upgrade --install argocd argo/argo-cd --version "$ARGOCD_CHART_VERSION" \
 
 echo "==> 5/7 repository access, projects, the demo namespace, and the root app"
 "$ROOT/bootstrap/argocd/register-repo.sh"
-kubectl apply -f "$ROOT/bootstrap/argocd/project.yaml" -f "$ROOT/bootstrap/argocd/agent-project.yaml"
+kubectl apply -f "$ROOT/bootstrap/argocd/project.yaml" -f "$ROOT/bootstrap/argocd/agent-project.yaml" -f "$ROOT/bootstrap/argocd/demo-project.yaml"
 kubectl apply -k "$ROOT/demo/base"          # the agent's Roles live in this namespace, so it must exist first
 kubectl apply -f "$ROOT/bootstrap/root-app.yaml"
 
@@ -59,7 +60,13 @@ for app in sealed-secrets secrets loki alloy grafana-dashboards grafana promethe
   kubectl -n argocd wait --for=jsonpath='{.status.health.status}'=Healthy "application/$app" --timeout=900s
 done
 
-echo "==> 7/7 done"
+echo "==> 7/7 first sync of the demo app (it has no automatic sync, on purpose)"
+until kubectl -n argocd get application demo >/dev/null 2>&1; do sleep 3; done
+kubectl -n argocd patch application demo --type merge -p '{"operation":{"sync":{}}}'
+kubectl -n argocd wait --for=jsonpath='{.status.sync.status}'=Synced application/demo --timeout=300s
+kubectl -n argocd wait --for=jsonpath='{.status.health.status}'=Healthy application/demo --timeout=300s
+
+echo "Done: cluster, platform, agent and demo are all up and in sync with git."
 echo "Next: ./scripts/portforward.sh   and start Ollama:  OLLAMA_HOST=0.0.0.0:11434 ollama serve"
 echo "Argo CD UI: http://localhost:8080  (user admin; password:"
 echo "  kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d)"

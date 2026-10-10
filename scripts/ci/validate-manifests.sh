@@ -36,7 +36,7 @@ for dir in apps/agent demo/base platform/secrets platform/grafana/dashboards; do
 done
 
 # Plain YAML: Argo CD projects and Applications, and the demo scenarios (deliberately broken at runtime, valid as manifests).
-join_yaml bootstrap/argocd/project.yaml bootstrap/argocd/agent-project.yaml bootstrap/root-app.yaml platform/apps/*.yaml > "$WORK/argo.yaml"
+join_yaml bootstrap/argocd/project.yaml bootstrap/argocd/agent-project.yaml bootstrap/argocd/demo-project.yaml bootstrap/root-app.yaml platform/apps/*.yaml > "$WORK/argo.yaml"
 validate "argo projects and applications" "$WORK/argo.yaml"
 join_yaml demo/scenarios/*.yaml > "$WORK/scenarios.yaml"
 validate "demo scenarios" "$WORK/scenarios.yaml"
