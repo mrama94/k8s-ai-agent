@@ -49,7 +49,7 @@ def rollback_deployment(namespace: str, name: str) -> str:
 
 
 def patch_resource(kind: str, namespace: str, name: str, patch) -> str:
-    return patching.apply(kind, namespace, name, patching.parse_patch(patch))
+    return patching.apply(kind, namespace, name, patching.parse_patch(patch, (kind, namespace, name)))
 
 
 def delete_resource(kind: str, namespace: str, name: str) -> str:

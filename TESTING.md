@@ -481,7 +481,7 @@ automatic sync and no self-heal**, so an approved fix is never reverted. Argo CD
 at any time with `./scripts/gitops-status.sh`, or in the Argo CD UI (http://localhost:8080).
 
 ### H1. A live break shows as drift and is not reverted; the agent's fix brings it back in line
-**Status:** Not run
+**Status:** Done (2026-10-10). Argo CD reported the drift within 3 seconds and did not revert it for nearly 5 minutes; the `ServiceNoEndpoints` alert reached the agent after about 2 minutes; the agent's fix returned the app to Synced. Two of three agent attempts were first blocked by a guard (a stray brace in the patch JSON, and a patch carrying `metadata.name`); the parser now forgives those two slips.
 
 **Commands to run**
 ```bash
@@ -511,19 +511,19 @@ None if the agent fixed it. Otherwise put git's version back:
 `kubectl -n argocd patch application demo --type merge -p '{"operation":{"sync":{}}}'`
 
 ### H2. A fix that differs from git stays as visible drift until a person decides
-**Status:** Not run
+**Status:** Done (2026-10-10). Live limit set to 4Mi (requests lowered with it, because Kubernetes refuses a limit below the request); the new pod failed to start; the agent proposed `limits.memory 4Mi -> 256Mi`, verification confirmed it, Argo CD showed `Deployment demo/storefront` OutOfSync and did not revert it for almost 3 minutes; a manual sync restored git's 64Mi.
 
 **Commands to run**
 ```bash
 kubectl -n demo patch deploy storefront --type strategic -p \
-  '{"spec":{"template":{"spec":{"containers":[{"name":"web","resources":{"limits":{"memory":"4Mi"}}}]}}}}'
+  '{"spec":{"template":{"spec":{"containers":[{"name":"web","resources":{"requests":{"memory":"2Mi"},"limits":{"memory":"4Mi"}}}]}}}}'
 sleep 90
 kubectl -n demo get pods -l app=storefront       # OOMKilled / CrashLoopBackOff
 ```
 Ask: `The storefront deployment in namespace demo keeps restarting. Find out why and fix it.`
 
 **Expected faulty behaviour**
-- New pods are killed with `OOMKilled` (limit 4Mi); `PodCrashLooping` and `DeploymentReplicasUnavailable` fire.
+- The new pod cannot start with a 4Mi limit (`RunContainerError`, or `OOMKilled` once it does start); the two old pods keep serving.
 
 **Expected fix from the agent**
 - Diagnosis: OOMKilled, the memory limit is far too low.

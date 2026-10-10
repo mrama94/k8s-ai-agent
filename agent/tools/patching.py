@@ -1,5 +1,6 @@
 """Generic, guarded object edits: parse a patch, preview it with a server-side dry run, apply it."""
 import json
+import re
 
 from kubernetes import client
 
@@ -34,13 +35,46 @@ class PatchError(Exception):
     """The patch is malformed or touches something the agent may not change."""
 
 
-def parse_patch(raw) -> dict:
+def _load(raw):
+    """Parse the model's JSON. A 7B model often adds a stray closing brace or bracket at the end; that is the only slip
+    forgiven, because the parsed result is validated and shown to the human exactly as it will be applied."""
+    if not isinstance(raw, str):
+        return raw
+    text = raw.strip()
     try:
-        patch = json.loads(raw) if isinstance(raw, str) else raw
+        return json.loads(text)
     except ValueError as exc:
+        try:
+            obj, end = json.JSONDecoder().raw_decode(text)
+        except ValueError:
+            raise PatchError(f"patch is not valid JSON: {exc}")
+        if re.fullmatch(r"[\]}\s]*", text[end:]):
+            return obj
         raise PatchError(f"patch is not valid JSON: {exc}")
+
+
+def parse_patch(raw, target: tuple | None = None) -> dict:
+    """Validate a patch. `target` is (kind, namespace, name) of the object being patched: with it, the identity fields
+    a manifest-style patch repeats (apiVersion, kind, metadata.name, metadata.namespace) are dropped when they match the
+    target, since they cannot change anything. Without a target, or when they differ, they are refused."""
+    patch = _load(raw)
     if not isinstance(patch, dict) or not patch:
         raise PatchError("patch must be a non-empty JSON object")
+    if target:
+        kind, namespace, name = target
+        patch = dict(patch)
+        patch.pop("apiVersion", None)
+        if patch.get("kind") == kind:
+            patch.pop("kind")
+        meta = patch.get("metadata")
+        if isinstance(meta, dict):
+            meta = {k: v for k, v in meta.items() if not (k == "name" and v == name or k == "namespace" and v == namespace)}
+            if meta:
+                patch["metadata"] = meta
+            else:
+                patch.pop("metadata")
+        if not patch:
+            raise PatchError("the patch changes nothing")
     if len(json.dumps(patch)) > MAX_PATCH_CHARS:
         raise PatchError(f"patch is larger than {MAX_PATCH_CHARS} characters")
     if not set(patch) <= TOP_LEVEL_KEYS:

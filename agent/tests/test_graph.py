@@ -338,3 +338,15 @@ def test_there_are_twelve_read_tools_each_with_a_description():
     assert len(READ_TOOLS) == 12
     assert all(len(t.description) > 20 for t in READ_TOOLS)
     assert len({t.name for t in READ_TOOLS}) == 12
+
+
+def test_the_plan_shows_the_tidied_patch_that_will_really_run(proposing, monkeypatch):
+    messy = '{"metadata": {"name": "shop"}, "spec": {"selector": {"app": "storefront"}}}}'
+    proposing(plan(act("patch_resource", kind="Service", namespace="demo", name="shop", patch=messy)))
+    monkeypatch.setattr(graph.guards, "check", lambda a: None)
+    seen = []
+    monkeypatch.setattr(graph.patching, "preview", lambda kind, ns, name, patch: seen.append(patch) or ["spec.selector.app: a -> b"])
+    action = graph.propose(STATE)["plan"]["actions"][0]
+    assert action["args"]["patch"] == '{"spec": {"selector": {"app": "storefront"}}}'
+    assert seen == [{"spec": {"selector": {"app": "storefront"}}}]
+    assert action["guard"] == "allowed"

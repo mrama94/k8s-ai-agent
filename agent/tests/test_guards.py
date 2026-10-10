@@ -132,3 +132,10 @@ def test_patch_contents_are_checked():
 
 def test_max_actions_constant_is_a_small_number():
     assert 1 <= guards.MAX_ACTIONS <= 3
+
+
+def test_a_patch_with_a_stray_brace_and_its_own_name_passes_the_guard():
+    check(tool="patch_resource", args={"kind": "Service", "namespace": "demo", "name": "shop",
+                                       "patch": '{"metadata": {"name": "shop"}, "spec": {"selector": {"app": "shop"}}}}'})
+    blocked("labels and annotations", tool="patch_resource", args={"kind": "Service", "namespace": "demo", "name": "shop",
+                                                                  "patch": '{"metadata": {"name": "other"}, "spec": {"x": 1}}'})

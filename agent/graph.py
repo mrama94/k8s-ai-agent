@@ -1,3 +1,4 @@
+import json
 import operator
 import os
 import re
@@ -345,8 +346,9 @@ def propose(state: AgentState) -> dict:
                 action["guard"] = "allowed"
                 if action["tool"] == "patch_resource":  # show exactly what would change before the human decides
                     args = action["args"]
-                    action["preview"] = patching.preview(
-                        args["kind"], args["namespace"], args["name"], patching.parse_patch(args.get("patch")))
+                    clean = patching.parse_patch(args.get("patch"), (args["kind"], args["namespace"], args["name"]))
+                    args["patch"] = json.dumps(clean)  # show and apply the validated, tidied patch, not the model's raw text
+                    action["preview"] = patching.preview(args["kind"], args["namespace"], args["name"], clean)
             except Exception as exc:
                 action["guard"] = f"blocked: {exc}"
                 action.pop("preview", None)

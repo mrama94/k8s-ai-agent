@@ -122,3 +122,57 @@ def test_apply_sends_a_real_patch_and_delete_deletes(svc_api):
 def test_workloads_cannot_be_deleted_but_small_objects_can():
     assert patching.DELETE_KINDS == {"Job", "CronJob", "Service", "ConfigMap"}
     assert {"Deployment", "StatefulSet", "DaemonSet"}.isdisjoint(patching.DELETE_KINDS)
+
+
+# ---- slips a small model makes, and the limits of forgiving them ----------------------------------------------------
+
+TARGET = ("Service", "demo", "shop")
+
+
+@pytest.mark.parametrize("raw", [
+    '{"spec": {"selector": {"app": "shop"}}}}',      # one stray closing brace: the real slip seen in a live run
+    '{"spec": {"selector": {"app": "shop"}}}}}',
+    '{"spec": {"selector": {"app": "shop"}}} ]\n',
+])
+def test_stray_closing_braces_after_a_complete_object_are_forgiven(raw):
+    assert patching.parse_patch(raw) == {"spec": {"selector": {"app": "shop"}}}
+
+
+@pytest.mark.parametrize("raw", [
+    '{"spec": {"selector": {"app": "shop"}}} and then some words',
+    '{"spec": {"a": 1}} {"spec": {"b": 2}}',
+    '{"spec": {"selector": {"app": "shop"}',          # missing braces are not guessed at
+    '{"spec": 1}}x',
+])
+def test_any_other_trailing_text_is_still_refused(raw):
+    with pytest.raises(patching.PatchError, match="not valid JSON"):
+        patching.parse_patch(raw)
+
+
+def test_a_manifest_style_patch_loses_only_its_own_identity_fields():
+    raw = {"apiVersion": "v1", "kind": "Service", "metadata": {"name": "shop", "namespace": "demo"}, "spec": {"x": 1}}
+    assert patching.parse_patch(raw, TARGET) == {"spec": {"x": 1}}
+    kept = {"metadata": {"name": "shop", "labels": {"tier": "web"}}, "spec": {"x": 1}}
+    assert patching.parse_patch(kept, TARGET) == {"metadata": {"labels": {"tier": "web"}}, "spec": {"x": 1}}
+
+
+def test_identity_fields_are_refused_without_a_target_or_when_they_point_elsewhere():
+    raw = {"kind": "Service", "metadata": {"name": "shop"}, "spec": {"x": 1}}
+    with pytest.raises(patching.PatchError, match="may only change"):
+        patching.parse_patch(raw)
+    with pytest.raises(patching.PatchError, match="labels and annotations"):
+        patching.parse_patch({"metadata": {"name": "other"}, "spec": {"x": 1}}, TARGET)
+    with pytest.raises(patching.PatchError, match="labels and annotations"):
+        patching.parse_patch({"metadata": {"namespace": "kube-system"}, "spec": {"x": 1}}, TARGET)
+    with pytest.raises(patching.PatchError, match="may only change"):
+        patching.parse_patch({"kind": "Deployment", "spec": {"x": 1}}, TARGET)
+
+
+def test_a_patch_that_is_only_identity_changes_nothing():
+    with pytest.raises(patching.PatchError, match="changes nothing"):
+        patching.parse_patch({"kind": "Service", "metadata": {"name": "shop"}}, TARGET)
+
+
+def test_the_target_never_lets_a_forbidden_field_through():
+    with pytest.raises(patching.PatchError, match="hostNetwork"):
+        patching.parse_patch({"kind": "Service", "spec": {"hostNetwork": True}}, TARGET)

@@ -12,7 +12,7 @@ cluster follow, and have manual edits to the platform reverted automatically.
 | 2 Secrets | Done (2026-10-10): Sealed Secrets controller via Argo CD; the webhook token and Grafana password are encrypted files in git; recovery tooling and key backup in place |
 | 3 Agent image and CI | Done (2026-10-10): GitHub Actions builds an arm64 image to a private ghcr.io package and commits the tag; the cluster pulls it with a sealed pull secret; Argo CD deploys apps/agent; dependencies pinned |
 | 4 CI checks | Built and passing locally (2026-10-10): 152 unit tests, lint, plain-secret scan, manifest and Helm validation, image build check, tests gate the image build. First run on GitHub pending |
-| 5 Demo namespace | Built (2026-10-10): `demo` Argo CD app with manual sync, healthy `storefront` workload, drift visible through scripts/gitops-status.sh. Live proof pending the push |
+| 5 Demo namespace | Done (2026-10-10): `demo` Argo CD app with manual sync and a healthy `storefront`; drift detected in 3 s and never reverted (tested for ~5 min and ~3 min); agent fixes bring the app back to Synced or stay visible as drift until a person syncs or updates git |
 
 ## Decisions
 

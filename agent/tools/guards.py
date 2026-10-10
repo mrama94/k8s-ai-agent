@@ -71,6 +71,6 @@ def check(action: dict) -> None:
             raise GuardError(f"{kind} {args['namespace']}/{args.get('name')} could not be read ({exc.status} {exc.reason})")
     if tool == "patch_resource":
         try:
-            patching.parse_patch(args.get("patch"))
+            patching.parse_patch(args.get("patch"), (kind, args["namespace"], args.get("name")))
         except patching.PatchError as exc:
             raise GuardError(str(exc))
