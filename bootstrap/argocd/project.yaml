@@ -5,14 +5,17 @@ metadata:
   name: platform
   namespace: argocd
 spec:
-  description: Monitoring platform (Prometheus, Alertmanager, Loki, Alloy, Grafana)
+  description: Platform (Prometheus, Alertmanager, Loki, Alloy, Grafana, Sealed Secrets)
   sourceRepos:
     - git@github.com:mrama94/k8s-ai-agent.git
     - https://prometheus-community.github.io/helm-charts
     - https://grafana.github.io/helm-charts
+    - https://bitnami.github.io/sealed-secrets
   destinations:
     - server: https://kubernetes.default.svc
       namespace: monitoring
+    - server: https://kubernetes.default.svc
+      namespace: sealed-secrets
   # The charts create cluster-wide RBAC and the namespace; the Alloy chart also ships one CRD (PodLogs).
   # Nothing else cluster-scoped is allowed.
   clusterResourceWhitelist:

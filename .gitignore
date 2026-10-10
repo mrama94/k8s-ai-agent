@@ -14,13 +14,14 @@ venv/
 .env
 .env.*
 
-# Never commit plain secrets or keys (use Sealed Secrets: only *sealed* files belong in git)
+# Never commit keys or plain secret manifests. Only SealedSecret files (*.sealedsecret.yaml) belong in git.
+# (Patterns are specific on purpose: a broad "secrets/" rule once hid the encrypted files from git.)
 *.key
 *.pem
-secrets/
-**/secret*.yaml
-!**/sealed-*.yaml
-!**/*sealedsecret*.yaml
+*-deploy-key
+sealed-secrets-key*.yaml
+*.plain.yaml
+*.plaintext.yaml
 
 # Scratch output
 tmp/

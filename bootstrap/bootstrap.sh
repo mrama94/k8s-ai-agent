@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Rebuilds the whole lab from this repository: cluster, Argo CD, and everything Argo CD then pulls from git.
 #
-# Phase 1 version: the monitoring platform now comes from git through Argo CD. Still manual (replaced later):
-#   secrets (Phase 2, Sealed Secrets) and the locally built agent image (Phase 3, registry image).
+# Phase 2 version: the platform and its secrets come from git through Argo CD (secrets as encrypted SealedSecrets).
+# Still manual (replaced later): the locally built agent image (Phase 3, registry image).
 #
-# Needs the read-only deploy key at ~/.config/k8s-agent-lab/argocd-deploy-key (see GITOPS-PLAN.md), and the platform
-# files pushed to GitHub main, because Argo CD reads them from there.
+# Needs, outside git:
+#   ~/.config/k8s-agent-lab/argocd-deploy-key          read-only deploy key so Argo CD can read the private repo
+#   ~/.config/k8s-agent-lab/sealed-secrets-key.yaml    backup of the Sealed Secrets key (bootstrap/sealed-secrets/key.sh backup)
+# and the files pushed to GitHub main, because Argo CD reads them from there.
 # Usage: ./bootstrap/bootstrap.sh            (safe to re-run; every step is idempotent)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -34,8 +36,8 @@ if ! kubectl -n kube-system get deploy metrics-server -o jsonpath='{.spec.templa
     -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
 fi
 
-echo "==> 3/7 secrets (legacy, replaced by Sealed Secrets in Phase 2)"
-"$ROOT/bootstrap/create-secrets.sh"
+echo "==> 3/7 Sealed Secrets key (must exist before the controller starts, or it makes a new key and the sealed files will not decrypt)"
+"$ROOT/bootstrap/sealed-secrets/key.sh" restore || echo "WARNING: continuing without the key. Run bootstrap/sealed-secrets/regenerate.sh, commit the new sealed files, then re-run."
 
 echo "==> 4/7 Argo CD"
 helm repo add argo https://argoproj.github.io/argo-helm >/dev/null 2>&1 || true
@@ -49,7 +51,7 @@ kubectl apply -f "$ROOT/bootstrap/argocd/project.yaml"
 kubectl apply -f "$ROOT/bootstrap/root-app.yaml"
 
 echo "==> 6/7 waiting for the platform (Argo CD pulls it from git)"
-for app in loki alloy grafana-dashboards grafana prometheus; do
+for app in sealed-secrets secrets loki alloy grafana-dashboards grafana prometheus; do
   until kubectl -n argocd get application "$app" >/dev/null 2>&1; do sleep 3; done
   kubectl -n argocd wait --for=jsonpath='{.status.health.status}'=Healthy "application/$app" --timeout=600s
 done

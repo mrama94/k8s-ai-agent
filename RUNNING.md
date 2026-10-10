@@ -153,6 +153,19 @@ Then quit Docker Desktop if you want the memory back.
 | No new alert row for a pod that broke again | One run per resource per 15 minutes, and Alertmanager re-sends a firing alert every hour. |
 | Nodes stay NotReady after `docker start` | Recreate the cluster (below). |
 
+## Secrets (Sealed Secrets)
+
+The webhook token and the Grafana password are encrypted files in git (`*.sealedsecret.yaml`). Only the controller in
+this cluster, holding its private key, can decrypt them. Two things stay on your Mac, outside git:
+
+| File | Purpose | If you lose it |
+|---|---|---|
+| `~/.config/k8s-agent-lab/sealed-secrets-key.yaml` | The decryption key. Back it up again if the cluster's key changes: `./bootstrap/sealed-secrets/key.sh backup` | The sealed files in git cannot be decrypted by a rebuilt cluster. Run `./bootstrap/sealed-secrets/regenerate.sh`, commit the three new files, re-run bootstrap. |
+| `~/.config/k8s-agent-lab/argocd-deploy-key` | Lets Argo CD read the private repo | Create a new key pair and add the public half to the repo as a read-only deploy key. |
+
+To seal a new secret from a live one: `./bootstrap/sealed-secrets/seal.sh <namespace> <name> <output-file>`. Never commit a plain
+Secret manifest.
+
 ## Rebuild from scratch
 
 ```bash
@@ -160,12 +173,12 @@ kind delete cluster --name agent-lab
 ./bootstrap/bootstrap.sh
 ```
 
-`bootstrap/bootstrap.sh` creates the cluster from `bootstrap/kind-config.yaml`, installs metrics-server (pinned), creates the
-secrets, installs Argo CD, registers the repo (read-only deploy key at `~/.config/k8s-agent-lab/argocd-deploy-key`), applies
+`bootstrap/bootstrap.sh` creates the cluster from `bootstrap/kind-config.yaml`, installs metrics-server (pinned), restores the
+Sealed Secrets key, installs Argo CD, registers the repo (read-only deploy key at `~/.config/k8s-agent-lab/argocd-deploy-key`), applies
 the root app so Argo CD pulls the monitoring platform from git, then builds and loads the agent image and applies
-`demo/base` and `apps/agent`. It is safe to re-run. The Grafana password and the webhook token are generated again, and the
-agent's history is lost. Argo CD reads from GitHub `main`, so the platform files must be pushed first. Secrets (Phase 2)
-and the agent image (Phase 3) are still manual steps; see `GITOPS-PLAN.md`.
+`demo/base` and `apps/agent`. It is safe to re-run. The secrets come back unchanged from the sealed files in git, and the
+agent's history is lost. Argo CD reads from GitHub `main`, so the platform files must be pushed first. The agent image
+(Phase 3) is still a manual step; see `GITOPS-PLAN.md`.
 
 ## Safety notes
 

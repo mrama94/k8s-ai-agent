@@ -18,7 +18,7 @@ apps/agent/       Kustomize app for the agent (the image is set in kustomization
 platform/         Argo CD Applications (platform/apps) and Helm values for Prometheus, Loki, Alloy, Grafana; the Grafana dashboard
 demo/base/        the demo namespace
 demo/scenarios/   broken workloads, applied by hand for one test
-bootstrap/        kind config, bootstrap.sh, Argo CD values, project and root app, create-secrets.sh
+bootstrap/        kind config, bootstrap.sh, Argo CD values, project and root app, Sealed Secrets helpers
 scripts/          port-forward helpers
 ```
 
