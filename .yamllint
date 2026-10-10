@@ -1,0 +1,16 @@
+# Readable YAML, without fighting the Helm values and manifests that are already written the way they are.
+extends: default
+rules:
+  line-length: disable
+  document-start: disable
+  comments: { min-spaces-from-content: 1 }
+  comments-indentation: disable
+  indentation: { spaces: 2, indent-sequences: consistent }
+  truthy: { check-keys: false }
+  braces: { max-spaces-inside: 1 }
+  brackets: { max-spaces-inside: 1 }
+  empty-lines: { max: 2 }
+  new-line-at-end-of-file: enable
+ignore: |
+  agent/.venv/
+  .git/

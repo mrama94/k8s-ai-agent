@@ -154,6 +154,26 @@ Then quit Docker Desktop if you want the memory back.
 | Nodes stay NotReady after `docker start` | Recreate the cluster (below). |
 | The agent pod is in `ImagePullBackOff` | The image pull token expired or was revoked. Make a new `read:packages` token and re-seal it (see Secrets above). A running pod is unaffected until it restarts. |
 
+## Running the checks
+
+CI runs the scripts in `scripts/ci/`; you can run the same ones before pushing.
+
+```bash
+python3 -m venv /tmp/agent-env
+/tmp/agent-env/bin/pip install -r agent/requirements.txt -r agent/requirements-dev.txt -c agent/constraints.txt
+brew install kubeconform shellcheck                    # once
+PYTHON=/tmp/agent-env/bin/python ./scripts/ci/run-all.sh
+```
+
+| Script | What it checks |
+|---|---|
+| `agent/` tests (`python -m pytest -q` inside `agent/`) | The guards, patch handling, plan checks, verification, alert webhook and read tools, with no cluster needed |
+| `scripts/ci/lint.sh` | yamllint, shellcheck, ruff (errors only) |
+| `scripts/ci/check-no-plain-secrets.sh` | Fails on a plain Secret manifest, a private key, or a token-looking string |
+| `scripts/ci/validate-manifests.sh` | Renders every Kustomize app and Helm chart, then validates against Kubernetes and CRD schemas |
+
+The image build (`agent-image.yml`) runs the unit tests first, so an image is never built from code whose tests fail.
+
 ## Changing the agent code
 
 1. Edit files under `agent/`, commit, and push to `main`.

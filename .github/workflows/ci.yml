@@ -1,0 +1,82 @@
+name: ci
+
+# Runs on every pull request and every push to main. Nothing here deploys anything; it only decides pass or fail.
+# The same scripts run on a laptop: scripts/ci/run-all.sh
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: unit tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"   # the version inside the agent image
+          cache: pip
+          cache-dependency-path: agent/constraints.txt
+      - name: Install the agent's pinned dependencies and the test tools
+        run: pip install -r agent/requirements.txt -r agent/requirements-dev.txt -c agent/constraints.txt
+      - name: Run the tests
+        working-directory: agent
+        run: python -m pytest -q
+
+  lint:
+    name: lint (yaml, shell, python)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r agent/requirements-dev.txt
+      - run: ./scripts/ci/lint.sh   # shellcheck is preinstalled on the runner
+
+  manifests:
+    name: manifests and Helm charts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml==6.0.3
+      - name: Install kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz \
+            | sudo tar -xz -C /usr/local/bin kubeconform
+          kubeconform -v
+      - run: ./scripts/ci/validate-manifests.sh
+
+  secrets:
+    name: no plain secrets
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/ci/check-no-plain-secrets.sh
+
+  image:
+    name: image builds
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      # Only proves the Dockerfile and the pinned dependencies still build. The real arm64 image is built and pushed by
+      # agent-image.yml after a merge to main.
+      - uses: docker/build-push-action@v6
+        with:
+          context: agent
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=ci-image
+          cache-to: type=gha,scope=ci-image,mode=max

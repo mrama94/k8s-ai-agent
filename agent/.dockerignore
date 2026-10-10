@@ -3,3 +3,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 .git/
+tests/
+pytest.ini
+requirements-dev.txt
+.ruff_cache/

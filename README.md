@@ -19,9 +19,15 @@ platform/         Argo CD Applications (platform/apps) and Helm values for Prome
 demo/base/        the demo namespace
 demo/scenarios/   broken workloads, applied by hand for one test
 bootstrap/        kind config, bootstrap.sh, Argo CD values, project and root app, Sealed Secrets helpers
-scripts/          port-forward helpers
+scripts/          port-forward helpers; scripts/ci/ holds the checks CI runs
 .github/workflows/ CI: builds and publishes the agent image
 ```
+
+## Checks
+
+Every pull request and push to `main` runs `.github/workflows/ci.yml`: unit tests, lint (YAML, shell, Python), a scan that rejects
+plain Secrets, keys and tokens, schema validation of every manifest and Helm chart, and a Docker build. The same scripts run
+locally: `PYTHON=<python with the agent requirements> ./scripts/ci/run-all.sh` (see RUNNING.md).
 
 ## Quick start
 

@@ -53,7 +53,7 @@ def check(action: dict) -> None:
             raise GuardError("deployment has no earlier revision to roll back to")
     if tool == "scale_deployment":
         replicas = args.get("replicas")
-        if not isinstance(replicas, int) or not 1 <= replicas <= MAX_REPLICAS:
+        if isinstance(replicas, bool) or not isinstance(replicas, int) or not 1 <= replicas <= MAX_REPLICAS:  # True is an int in Python
             raise GuardError(f"replicas must be an integer from 1 to {MAX_REPLICAS}")
     if tool == "delete_pod":
         pod = core.read_namespaced_pod(args.get("name", ""), args["namespace"])

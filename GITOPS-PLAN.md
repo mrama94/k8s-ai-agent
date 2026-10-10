@@ -11,8 +11,8 @@ cluster follow, and have manual edits to the platform reverted automatically.
 | 1 Argo CD and the platform | Done (2026-10-10): Argo CD installed; Loki, Alloy, Grafana (and its dashboard) and Prometheus adopted with no pod restarts; Helm releases removed; self-heal verified |
 | 2 Secrets | Done (2026-10-10): Sealed Secrets controller via Argo CD; the webhook token and Grafana password are encrypted files in git; recovery tooling and key backup in place |
 | 3 Agent image and CI | Done (2026-10-10): GitHub Actions builds an arm64 image to a private ghcr.io package and commits the tag; the cluster pulls it with a sealed pull secret; Argo CD deploys apps/agent; dependencies pinned |
-| 4 CI checks | Next |
-| 5 Demo namespace | Not started |
+| 4 CI checks | Built and passing locally (2026-10-10): 152 unit tests, lint, plain-secret scan, manifest and Helm validation, image build check, tests gate the image build. First run on GitHub pending |
+| 5 Demo namespace | Next |
 
 ## Decisions
 
