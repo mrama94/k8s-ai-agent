@@ -218,7 +218,7 @@ apps/agent/                 Kustomize app for the agent: Deployment, RBAC, volum
 platform/                   Helm values per component (prometheus, loki, alloy, grafana) and the Grafana dashboard
 demo/base/                  the demo namespace
 demo/scenarios/             the deliberately broken workloads, applied by hand for one test at a time
-bootstrap/                  kind config, bootstrap.sh (rebuilds the lab), install-platform.sh (legacy Helm install)
+bootstrap/                  kind config, bootstrap.sh (rebuilds the lab), Argo CD values, project and root app
 scripts/                    portforward.sh and stop-portforward.sh
 RUNNING.md  TESTING.md  ARCHITECTURE.md   how to run it, what to test, this page
 ```

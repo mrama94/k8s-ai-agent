@@ -13,8 +13,10 @@ spec:
   destinations:
     - server: https://kubernetes.default.svc
       namespace: monitoring
-  # The charts create cluster-wide RBAC and the namespace itself; nothing else cluster-scoped is allowed.
+  # The charts create cluster-wide RBAC and the namespace; the Alloy chart also ships one CRD (PodLogs).
+  # Nothing else cluster-scoped is allowed.
   clusterResourceWhitelist:
     - { group: "", kind: Namespace }
     - { group: rbac.authorization.k8s.io, kind: ClusterRole }
     - { group: rbac.authorization.k8s.io, kind: ClusterRoleBinding }
+    - { group: apiextensions.k8s.io, kind: CustomResourceDefinition }

@@ -176,7 +176,7 @@ and the agent image (Phase 3) are still manual steps; see `GITOPS-PLAN.md`.
 
 ## Logs (Loki and Alloy)
 
-Installed by `./bootstrap/install-platform.sh` (Loki 7.3.0 and Alloy 1.13.0, namespace `monitoring`). Alloy tails pod logs from every
+Deployed by Argo CD from `platform/` (Loki 7.3.0 and Alloy 1.13.0, namespace `monitoring`). Alloy tails pod logs from every
 namespace through the Kubernetes API and pushes them to Loki, which keeps 6 hours (no persistence, so a Loki restart clears them).
 
 - **Grafana:** Dashboards, Kubernetes agent, Demo workloads, "Logs" panel at the bottom. Or Explore, data source Loki.
