@@ -1,0 +1,36 @@
+# Argo CD for a laptop kind cluster, slimmed: no Dex (no SSO), no notifications, no ApplicationSet controller.
+# Chart: argo/argo-cd 10.10.2 (Argo CD v3.5.4). Installed once by bootstrap/bootstrap.sh; it then pulls everything else from git.
+global:
+  domain: localhost
+configs:
+  params:
+    server.insecure: true        # plain HTTP behind a local port-forward, so no TLS to set up
+    controller.status.processors: 5
+    controller.operation.processors: 5
+    reposerver.parallelism.limit: 2
+  cm:
+    # Track objects by annotation, not by the app.kubernetes.io/instance label: Helm charts already use that label,
+    # and label tracking would make Argo CD and the charts fight over it.
+    application.resourceTrackingMethod: annotation
+dex:
+  enabled: false
+notifications:
+  enabled: false
+applicationSet:
+  replicas: 0                    # not used: the root app lists its Applications directly
+controller:
+  resources:
+    requests: { cpu: 50m, memory: 200Mi }
+    limits: { memory: 400Mi }
+server:
+  resources:
+    requests: { cpu: 25m, memory: 80Mi }
+    limits: { memory: 200Mi }
+repoServer:
+  resources:
+    requests: { cpu: 25m, memory: 100Mi }
+    limits: { memory: 300Mi }
+redis:
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { memory: 96Mi }

@@ -45,6 +45,12 @@ agent/            application source code (unchanged)
 - **Done when:** `kustomize build` and `helm template` render everything from the new paths.
 
 ### Phase 1: Argo CD and the platform
+**How the migration works (zero downtime):** each Application renders the same chart and values that Helm used, with
+`releaseName` set to the existing release name, so Argo CD adopts the running objects instead of recreating them. Once an
+app is Synced and Healthy, the old Helm release record (a Secret) is removed with the objects left in place.
+**Repo access:** the repo is private, so Argo CD reads it with a read-only SSH deploy key. The private key lives only in
+`~/.config/k8s-agent-lab/argocd-deploy-key` and a cluster Secret. The public key is added to the repo as a deploy key
+(read-only) by the repo owner.
 - Install Argo CD (pinned version), slimmed; reach the UI on a port-forward.
 - Add an Argo CD project that limits which repo and namespaces each app may use.
 - Move one component at a time from hand-run Helm to an Argo CD Application: Loki, Alloy, Grafana, then Prometheus.

@@ -5,5 +5,6 @@ trap 'kill 0' INT TERM
 forward() { while true; do kubectl -n "$1" port-forward "$2" "$3" >/dev/null 2>&1; sleep 1; done; }
 forward ai-agent svc/k8s-agent 8000:8000 &
 forward monitoring svc/grafana 3000:80 &
-echo "agent http://localhost:8000 | grafana http://localhost:3000 (Ctrl+C to stop)"
+forward argocd svc/argocd-server 8080:80 &
+echo "agent http://localhost:8000 | grafana http://localhost:3000 | argocd http://localhost:8080 (Ctrl+C to stop)"
 wait

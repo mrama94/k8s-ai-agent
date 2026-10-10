@@ -9,6 +9,7 @@ services. Nothing is exposed beyond `localhost` except Ollama, which listens on 
 |---|---|---|---|
 | Kubernetes agent UI | http://localhost:8000 | `kubectl port-forward` | Chat, alerts panel, approvals |
 | Grafana | http://localhost:3000 | `kubectl port-forward` | Dashboards, alert history |
+| Argo CD | http://localhost:8080 | `kubectl port-forward` | See what git deployed, sync state, drift |
 | Ollama | http://localhost:11434 | Host process, port 11434 | The model; the agent pod reaches it at `host.docker.internal:11434` |
 | Prometheus (optional) | http://localhost:9090 | `kubectl port-forward` | Debugging queries and rules only |
 | Alertmanager (optional) | http://localhost:9093 | `kubectl port-forward` | Debugging alert routing only |
@@ -80,6 +81,16 @@ kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.admin-passwor
 
 Open http://localhost:3000, then Dashboards, Kubernetes agent, Demo workloads.
 
+### Log in to Argo CD
+
+The username is `admin`. The first password is generated at install time:
+
+```bash
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
+```
+
+Open http://localhost:8080. `./scripts/portforward.sh` starts this forward too.
+
 ## 5. Check that everything is reachable
 
 ```bash
@@ -149,11 +160,12 @@ kind delete cluster --name agent-lab
 ./bootstrap/bootstrap.sh
 ```
 
-`bootstrap/bootstrap.sh` creates the cluster from `bootstrap/kind-config.yaml`, installs metrics-server (pinned), installs
-the monitoring platform (`bootstrap/install-platform.sh`, Helm values in `platform/`), builds and loads the agent image,
-and applies `demo/base` and `apps/agent`. It is safe to re-run. The Grafana password and the webhook token are generated
-again, and the agent's history is lost. (The GitOps migration, see `GITOPS-PLAN.md`, will replace most of this script
-with "install Argo CD, apply the root app".)
+`bootstrap/bootstrap.sh` creates the cluster from `bootstrap/kind-config.yaml`, installs metrics-server (pinned), creates the
+secrets, installs Argo CD, registers the repo (read-only deploy key at `~/.config/k8s-agent-lab/argocd-deploy-key`), applies
+the root app so Argo CD pulls the monitoring platform from git, then builds and loads the agent image and applies
+`demo/base` and `apps/agent`. It is safe to re-run. The Grafana password and the webhook token are generated again, and the
+agent's history is lost. Argo CD reads from GitHub `main`, so the platform files must be pushed first. Secrets (Phase 2)
+and the agent image (Phase 3) are still manual steps; see `GITOPS-PLAN.md`.
 
 ## Safety notes
 

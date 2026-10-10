@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# The Grafana chart mounts this ConfigMap by name (dashboardsConfigMaps in platform/grafana/values.yaml).
+generatorOptions:
+  disableNameSuffixHash: true
+configMapGenerator:
+  - name: grafana-dashboards
+    namespace: monitoring
+    files:
+      - demo-workloads.json

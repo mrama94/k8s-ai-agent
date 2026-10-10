@@ -1,0 +1,20 @@
+# Limits what the platform Applications may do: which repos they read and which namespaces they write to.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: platform
+  namespace: argocd
+spec:
+  description: Monitoring platform (Prometheus, Alertmanager, Loki, Alloy, Grafana)
+  sourceRepos:
+    - git@github.com:mrama94/k8s-ai-agent.git
+    - https://prometheus-community.github.io/helm-charts
+    - https://grafana.github.io/helm-charts
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: monitoring
+  # The charts create cluster-wide RBAC and the namespace itself; nothing else cluster-scoped is allowed.
+  clusterResourceWhitelist:
+    - { group: "", kind: Namespace }
+    - { group: rbac.authorization.k8s.io, kind: ClusterRole }
+    - { group: rbac.authorization.k8s.io, kind: ClusterRoleBinding }
