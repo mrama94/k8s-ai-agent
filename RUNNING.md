@@ -220,6 +220,10 @@ kind delete cluster --name agent-lab
 ./bootstrap/bootstrap.sh
 ```
 
+Tested on 2026-10-10: the rebuild took about 2 minutes with images cached and everything came back healthy with identical secrets.
+What is lost: the agent's history and alert list, and Prometheus and Loki data. Before you delete a cluster, check that
+`~/.config/k8s-agent-lab/` still holds the deploy key and the sealing key backup (`./bootstrap/sealed-secrets/key.sh backup`).
+
 `bootstrap/bootstrap.sh` creates the cluster from `bootstrap/kind-config.yaml`, installs metrics-server (pinned), restores the
 Sealed Secrets key, installs Argo CD, registers the repo (read-only deploy key at `~/.config/k8s-agent-lab/argocd-deploy-key`), applies
 the root app so Argo CD pulls the monitoring platform from git, then applies `demo/base`; Argo CD pulls the agent

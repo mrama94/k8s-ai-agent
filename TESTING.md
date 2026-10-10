@@ -1169,6 +1169,28 @@ kubectl get nodes                                    # wait for Ready
 **Clean up**
 Restart the port-forwards (`./scripts/portforward.sh`) and Ollama.
 
+### F7. Full rebuild from git
+**Status:** Done (2026-10-10): 115 seconds, all apps Synced and Healthy, secret values identical, alert path working.
+
+**Commands to run**
+```bash
+ls ~/.config/k8s-agent-lab/                          # deploy key and sealing key backup must be there
+./bootstrap/sealed-secrets/key.sh backup             # refresh the backup
+kind delete cluster --name agent-lab
+./bootstrap/bootstrap.sh
+./scripts/gitops-status.sh
+```
+
+**Expected faulty behaviour**
+- None; the whole cluster is gone first.
+
+**Expected fix from the agent**
+- Not the agent. The script finishes with exit code 0, every Argo CD app is Synced and Healthy, the agent runs the image
+  named in `apps/agent/kustomization.yaml`, and the sealed secrets decrypt to the same values as before.
+
+**Clean up**
+Restart the port-forwards (`./scripts/portforward.sh`). Agent history and Prometheus and Loki data start empty.
+
 ---
 
 ## Suggested first pass
