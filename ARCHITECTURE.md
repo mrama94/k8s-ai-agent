@@ -149,9 +149,11 @@ Tools return small, tidy output because a small model gets lost in long dumps. T
 - Workloads (Deployments, StatefulSets, DaemonSets) cannot be deleted.
 
 **Layer 2: RBAC (hard limit, in Kubernetes).** The agent runs as its own ServiceAccount. Even if the code were wrong or
-the model were tricked, the API refuses anything outside what that account may do: read most things cluster-wide,
+the model were tricked, the API refuses anything outside what that account may do: read nodes, pods, logs, events,
+Services, endpoints, Deployments, ReplicaSets, StatefulSets, DaemonSets, Jobs and CronJobs cluster-wide (and nothing else),
 read ConfigMaps only in `demo`, patch a fixed set of kinds only in `demo`, patch nodes (for labels), and **nothing** for
-Secrets, RBAC objects, creating objects, or other namespaces.
+Secrets, RBAC objects, creating objects, or other namespaces. A test (`agent/tests/test_rbac.py`) pins this exact list, so a
+permission can only be added by changing the test as well.
 
 **Other protections**
 - Text from the cluster (logs, events, alert text) is marked as untrusted in the prompts, and alert text is cleaned.

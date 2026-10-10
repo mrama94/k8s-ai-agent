@@ -9,7 +9,7 @@ from kubernetes import client
 from kubernetes.utils import parse_quantity
 from langchain_core.tools import tool
 
-from k8s_client import apps, batch, core, custom, networking
+from k8s_client import apps, batch, core
 from tools.runbooks import search_runbooks
 
 MAX_CHARS = 4000
@@ -128,19 +128,6 @@ def get_namespace_events(namespace: str) -> str:
 
 
 @tool
-def get_previous_logs(namespace: str, name: str, tail_lines: int = 50) -> str:
-    """Get logs from the previous, crashed instance of a pod's container. Use this for CrashLoopBackOff."""
-    try:
-        return _clip(core.read_namespaced_pod_log(name, namespace, previous=True, tail_lines=tail_lines))
-    except client.ApiException as exc:
-        if exc.status == 404:
-            return "pod not found; stored logs from Loki:\n" + _loki_lines(namespace, name)
-        return f"no previous logs: {exc.reason}"
-    except Exception as exc:
-        return f"no previous logs: {exc}"
-
-
-@tool
 def get_deployment(namespace: str, name: str) -> str:
     """Show a Deployment's replica counts, images, conditions and rollout history (revisions with their images)."""
     d = apps.read_namespaced_deployment(name, namespace)
@@ -215,47 +202,6 @@ def get_service(namespace: str, name: str) -> str:
 
 
 @tool
-def list_ingresses(namespace: str) -> str:
-    """List Ingress rules in a namespace: hosts, paths and the Service each path routes to."""
-    out = []
-    for ing in networking.list_namespaced_ingress(namespace).items:
-        for rule in (ing.spec.rules or []):
-            for path in (rule.http.paths if rule.http else []):
-                svc = path.backend.service
-                out.append({"ingress": ing.metadata.name, "host": rule.host, "path": path.path,
-                            "service": svc.name if svc else None,
-                            "port": (svc.port.number or svc.port.name) if svc and svc.port else None})
-    return _j(out)
-
-
-@tool
-def get_configmap_keys(namespace: str, name: str) -> str:
-    """List the keys in a ConfigMap and the size of each value. Values are never returned."""
-    cm = core.read_namespaced_config_map(name, namespace)
-    return _j({"keys_and_sizes": {k: len(v) for k, v in (cm.data or {}).items()},
-               "binary_keys": list((cm.binary_data or {}).keys())})
-
-
-@tool
-def list_pvcs(namespace: str) -> str:
-    """List PersistentVolumeClaims with phase, storage class, requested size and bound volume."""
-    return _j([
-        {"name": c.metadata.name, "phase": c.status.phase, "storage_class": c.spec.storage_class_name,
-         "requested": c.spec.resources.requests.get("storage"), "volume": c.spec.volume_name}
-        for c in core.list_namespaced_persistent_volume_claim(namespace).items
-    ])
-
-
-@tool
-def get_resource_quota(namespace: str) -> str:
-    """Show ResourceQuotas for a namespace: what is limited and how much is used."""
-    return _j([
-        {"name": q.metadata.name, "hard": q.status.hard, "used": q.status.used}
-        for q in core.list_namespaced_resource_quota(namespace).items
-    ])
-
-
-@tool
 def describe_node(name: str) -> str:
     """Show a node's conditions, taints, allocatable resources, and how much CPU and memory pods request on it."""
     n = core.read_node(name)
@@ -273,26 +219,6 @@ def describe_node(name: str) -> str:
         "allocatable": {"cpu": alloc.get("cpu"), "memory": alloc.get("memory"), "pods": alloc.get("pods")},
         "requested": {"cpu_cores": round(float(cpu), 2), "memory_gib": round(float(mem) / 2**30, 2)},
         "pod_count": len(pods),
-    })
-
-
-@tool
-def get_metrics(namespace: str) -> str:
-    """Show live CPU (millicores) and memory (MiB) for nodes and for pods in a namespace. Needs metrics-server."""
-    try:
-        nodes = custom.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "nodes")["items"]
-        pods = custom.list_namespaced_custom_object("metrics.k8s.io", "v1beta1", namespace, "pods")["items"]
-    except Exception as exc:
-        return f"metrics unavailable (is metrics-server installed?): {exc}"
-
-    def usage(u):
-        return {"cpu_m": round(float(parse_quantity(u["cpu"])) * 1000),
-                "mem_mib": round(float(parse_quantity(u["memory"])) / 2**20)}
-
-    return _j({
-        "nodes": {n["metadata"]["name"]: usage(n["usage"]) for n in nodes},
-        "pods": {p["metadata"]["name"]: [dict(name=c["name"], **usage(c["usage"])) for c in p["containers"]]
-                 for p in pods},
     })
 
 

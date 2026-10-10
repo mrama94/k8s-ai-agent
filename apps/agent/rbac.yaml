@@ -10,19 +10,13 @@ metadata:
   name: k8s-agent-read
 rules:
   - apiGroups: [""]
-    resources: ["nodes", "namespaces", "pods", "pods/log", "events", "services", "endpoints", "persistentvolumeclaims", "resourcequotas"]
+    resources: ["nodes", "pods", "pods/log", "events", "services", "endpoints"]
     verbs: ["get", "list"]
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
     verbs: ["get", "list"]
   - apiGroups: ["batch"]
     resources: ["jobs", "cronjobs"]
-    verbs: ["get", "list"]
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses"]
-    verbs: ["get", "list"]
-  - apiGroups: ["metrics.k8s.io"]
-    resources: ["nodes", "pods"]
     verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

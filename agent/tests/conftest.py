@@ -14,7 +14,7 @@ os.environ["ALERT_TOKEN"] = "test-token"
 os.environ["ALLOWED_NAMESPACES"] = "demo"
 
 _fake = types.ModuleType("k8s_client")
-for _name in ("core", "apps", "batch", "networking", "custom"):
+for _name in ("core", "apps", "batch"):
     setattr(_fake, _name, MagicMock(name=_name))
 sys.modules["k8s_client"] = _fake
 
@@ -22,7 +22,7 @@ sys.modules["k8s_client"] = _fake
 @pytest.fixture(autouse=True)
 def fresh_cluster():
     """Every test starts with untouched mocks."""
-    for name in ("core", "apps", "batch", "networking", "custom"):
+    for name in ("core", "apps", "batch"):
         getattr(_fake, name).reset_mock(return_value=True, side_effect=True)
     return _fake
 
