@@ -2,7 +2,7 @@
 # lab: spin up, pause and destroy the whole lab (cluster, Argo CD, platform, agent) with one command.
 #
 #   lab up        build the cluster and everything on it, start Ollama and the port-forwards
-#   lab down      destroy the cluster (asks first, backs up the sealing key first)
+#   lab down      destroy the cluster and stop Ollama (asks first, backs up the sealing key first)
 #   lab stop      pause the cluster without destroying it (history is kept)
 #   lab start     resume a paused cluster
 #   lab status    nodes, Argo CD apps, drift from git, Ollama, port-forwards
@@ -10,7 +10,8 @@
 #   lab doctor    check that everything a rebuild needs is in place
 #   lab link      put `lab` on your PATH (symlink in ~/.local/bin)
 #
-# Options: --yes (skip the confirmation in `down`), --no-forward (`up` and `start`), --stop-ollama (`down` and `stop`)
+# Options: --yes (skip the confirmation in `down`), --keep-ollama (`down` leaves Ollama running), --no-forward (`up` and `start`),
+#          --stop-ollama (`stop` also stops Ollama)
 # Environment: LAB_CLUSTER (cluster name, default agent-lab)
 set -uo pipefail
 
@@ -50,6 +51,13 @@ wait_for_nodes() { # seconds
 }
 
 # ---- cluster state -----------------------------------------------------------------------------------------------
+# Without Docker, kind and docker cannot see any cluster. That must never be reported as "the cluster does not exist".
+docker_up() { docker info >/dev/null 2>&1; }
+need_docker() {
+  docker_up && return 0
+  say "${R}Docker is not running.${N} Start Docker Desktop and try again (lab cannot see or change the cluster without it)."
+  return 1
+}
 cluster_exists() { command -v kind >/dev/null && kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; }
 cluster_running() { docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CLUSTER-control-plane"; }
 cluster_stopped() { docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$CLUSTER-control-plane" && ! cluster_running; }
@@ -173,12 +181,18 @@ cmd_up() {
 }
 
 cmd_down() {
-  local yes=0 ollama=0
-  for a in "$@"; do case "$a" in --yes) yes=1 ;; --stop-ollama) ollama=1 ;; esac; done
+  need_docker || return 1
+  local yes=0 ollama=1   # down stops Ollama too, unless told otherwise
+  for a in "$@"; do case "$a" in --yes) yes=1 ;; --keep-ollama) ollama=0 ;; --stop-ollama) ollama=1 ;; esac; done
   if ! cluster_exists; then say "Cluster $CLUSTER does not exist. Nothing to do."; return 0; fi
   say "This will ${R}destroy${N} the cluster ${B}$CLUSTER${N}: every pod, volume and Argo CD app on it."
   say "Lost for good: the agent's history and alert list, and Prometheus and Loki data."
   say "Kept (it comes back from git): the platform, the secrets, the agent, the demo workloads."
+  if [ "$ollama" -eq 1 ]; then
+    say "Ollama will be stopped too (anything else using it on this Mac stops with it). Use --keep-ollama to leave it running."
+  else
+    say "Ollama will be left running."
+  fi
   if [ "$yes" -ne 1 ]; then
     printf 'Type the cluster name (%s) to confirm: ' "$CLUSTER"
     local answer=""
@@ -203,6 +217,7 @@ cmd_down() {
 cmd_stop() {
   local ollama=0
   for a in "$@"; do [ "$a" = "--stop-ollama" ] && ollama=1; done
+  need_docker || return 1
   cluster_running || { say "The cluster is not running."; return 0; }
   step "stopping the port-forwards"; forward_stop
   step "pausing the cluster (nothing is deleted)"
@@ -212,6 +227,7 @@ cmd_stop() {
 }
 
 cmd_start() {
+  need_docker || return 1
   local forward=1
   for a in "$@"; do [ "$a" = "--no-forward" ] && forward=0; done
   if cluster_running; then
@@ -237,7 +253,9 @@ cmd_start() {
 
 cmd_status() {
   step "cluster $CLUSTER"
-  if cluster_running; then
+  if ! docker_up; then
+    say "  ${R}Docker is not running${N}, so the cluster cannot be seen (it is not running either)"
+  elif cluster_running; then
     kc get nodes --no-headers 2>/dev/null | awk '{print "  " $1 "  " $2}'
     step "Argo CD"
     kc -n argocd get applications -o custom-columns=APP:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status 2>/dev/null | sed 's/^/  /'
@@ -264,7 +282,7 @@ for app in json.load(sys.stdin)["items"]:
 
 cmd_forward() {
   case "${1:-status}" in
-    start) cluster_running || { say "The cluster is not running."; return 1; }; forward_start ;;
+    start) need_docker || return 1; cluster_running || { say "The cluster is not running."; return 1; }; forward_start ;;
     stop) forward_stop ;;
     status) forwards_running && say "running: agent :8000, grafana :3000, argocd :8080" || say "not running" ;;
     *) say "usage: lab forward start|stop|status"; return 2 ;;

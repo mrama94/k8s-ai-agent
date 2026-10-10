@@ -35,7 +35,7 @@ locally: `PYTHON=<python with the agent requirements> ./scripts/ci/run-all.sh` (
 ./lab up          # cluster, Argo CD, monitoring, agent, Ollama and the port-forwards (2 to 5 minutes)
 ./lab status      # what is running, and any drift from git
 ./lab stop        # pause (history is kept); ./lab start resumes
-./lab down        # destroy (asks first); ./lab up brings it all back
+./lab down        # destroy the cluster and stop Ollama (asks first); ./lab up brings it all back
 ./lab link        # optional: type `lab` from anywhere
 ```
 

@@ -11,8 +11,8 @@ One command builds, pauses and destroys everything described below. Run it from 
 | Command | What it does |
 |---|---|
 | `lab up` | Checks prerequisites, starts one Ollama server if none is running, builds the cluster and everything on it (about 2 to 5 minutes), starts the port-forwards. Safe to re-run; resumes a paused cluster. |
-| `lab down` | Destroys the cluster. Backs up the sealing key first, tells you what is lost, and makes you type the cluster name to confirm (`--yes` skips that). `--stop-ollama` also stops Ollama. |
-| `lab stop` / `lab start` | Pauses and resumes the cluster without deleting anything, so history survives. `start` on a running cluster just makes sure the forwards and Ollama are up. |
+| `lab down` | Destroys the cluster **and stops Ollama**. Backs up the sealing key first, tells you what is lost, and makes you type the cluster name to confirm (`--yes` skips that). `--keep-ollama` leaves Ollama running. |
+| `lab stop` / `lab start` | Pauses and resumes the cluster without deleting anything, so history survives. `stop` leaves Ollama running (add `--stop-ollama` to stop it too). `start` on a running cluster just makes sure the forwards and Ollama are up. |
 | `lab status` | Nodes, every Argo CD app, drift from git, the agent image, Ollama and the port-forwards. |
 | `lab forward start\|stop\|status` | Only the port-forwards. |
 | `lab doctor` | Checks tools, Docker memory, the two files git cannot hold, unpushed or uncommitted changes, Ollama. Run it before a rebuild. |
