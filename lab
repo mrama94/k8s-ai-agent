@@ -1,0 +1,294 @@
+#!/usr/bin/env bash
+# lab: spin up, pause and destroy the whole lab (cluster, Argo CD, platform, agent) with one command.
+#
+#   lab up        build the cluster and everything on it, start Ollama and the port-forwards
+#   lab down      destroy the cluster (asks first, backs up the sealing key first)
+#   lab stop      pause the cluster without destroying it (history is kept)
+#   lab start     resume a paused cluster
+#   lab status    nodes, Argo CD apps, drift from git, Ollama, port-forwards
+#   lab forward   start | stop | status   the port-forwards for the agent, Grafana and Argo CD
+#   lab doctor    check that everything a rebuild needs is in place
+#   lab link      put `lab` on your PATH (symlink in ~/.local/bin)
+#
+# Options: --yes (skip the confirmation in `down`), --no-forward (`up` and `start`), --stop-ollama (`down` and `stop`)
+# Environment: LAB_CLUSTER (cluster name, default agent-lab)
+set -uo pipefail
+
+# Find the repo even when this file is run through a symlink.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  case "$SOURCE" in /*) ;; *) SOURCE="$DIR/$SOURCE" ;; esac
+done
+ROOT="$(cd "$(dirname "$SOURCE")" && pwd)"
+
+CLUSTER="${LAB_CLUSTER:-agent-lab}"
+CTX="kind-$CLUSTER"
+CONFIG_DIR="$HOME/.config/k8s-agent-lab"
+OLLAMA_LOG=/tmp/lab-ollama.log
+FORWARD_LOG=/tmp/lab-forward.log
+export LAB_CLUSTER="$CLUSTER"
+
+if [ -t 1 ]; then G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; B=$'\033[1m'; N=$'\033[0m'; else G=; Y=; R=; B=; N=; fi
+say() { printf '%s\n' "$*"; }
+step() { printf '%s==>%s %s\n' "$B" "$N" "$*"; }
+usage() { sed -n '2,14p' "$ROOT/lab" | sed 's/^# \{0,1\}//'; }
+kc() { kubectl --context "$CTX" "$@"; }
+
+# After a restart the API server needs a little while, and early calls can fail with transient errors
+# (even "forbidden"). So wait by polling instead of trusting the first answer.
+wait_for_nodes() { # seconds
+  local deadline=$((SECONDS + ${1:-240})) total notready
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    total=$(kc get nodes --no-headers 2>/dev/null | wc -l | tr -d ' ')
+    notready=$(kc get nodes --no-headers 2>/dev/null | awk '$2 != "Ready"' | wc -l | tr -d ' ')
+    [ "${total:-0}" -ge 2 ] && [ "${notready:-1}" = "0" ] && return 0
+    sleep 3
+  done
+  return 1
+}
+
+# ---- cluster state -----------------------------------------------------------------------------------------------
+cluster_exists() { command -v kind >/dev/null && kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; }
+cluster_running() { docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CLUSTER-control-plane"; }
+cluster_stopped() { docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$CLUSTER-control-plane" && ! cluster_running; }
+
+# ---- Ollama (runs on the Mac, outside the cluster) ---------------------------------------------------------------
+ollama_up() { curl -s -m 2 -o /dev/null http://localhost:11434/api/tags; }
+ollama_all_interfaces() { lsof -nP -iTCP:11434 -sTCP:LISTEN 2>/dev/null | grep -qE '\*:11434|\[::\]:11434|0\.0\.0\.0:11434'; }
+
+ensure_ollama() {
+  if ollama_up; then
+    if ollama_all_interfaces; then
+      say "  ${G}ok${N}   Ollama is running and reachable from the cluster"
+    else
+      say "  ${Y}warn${N} Ollama is running but only on 127.0.0.1, so the cluster cannot reach it."
+      say "       Stop it and let lab start it:  pkill -f 'ollama serve'; lab up"
+    fi
+    return 0
+  fi
+  command -v ollama >/dev/null || { say "  ${Y}warn${N} ollama is not installed; the agent has no model to talk to"; return 0; }
+  if pgrep -f "Ollama.app" >/dev/null; then
+    say "  ${Y}warn${N} the Ollama menu-bar app is open. It starts its own server on 127.0.0.1 and two servers made requests hang."
+    say "       Quit the app, then run lab up again."
+    return 0
+  fi
+  say "  starting one Ollama server (log: $OLLAMA_LOG)"
+  OLLAMA_HOST=0.0.0.0:11434 nohup ollama serve > "$OLLAMA_LOG" 2>&1 &
+  for _ in $(seq 1 20); do ollama_up && break; sleep 1; done
+  if ollama_up; then say "  ${G}ok${N}   Ollama started"; else say "  ${R}fail${N} Ollama did not start, see $OLLAMA_LOG"; fi
+  ollama list 2>/dev/null | grep -q 'qwen2.5:7b' || say "  ${Y}warn${N} the model is missing: ollama pull qwen2.5:7b"
+}
+
+stop_ollama() {
+  pkill -f "ollama serve" 2>/dev/null; pkill -f llama-server 2>/dev/null
+  say "  Ollama stopped"
+}
+
+# ---- port-forwards -----------------------------------------------------------------------------------------------
+forwards_running() { pgrep -f 'scripts/portforward\.sh' >/dev/null; }
+
+forward_start() {
+  if forwards_running; then say "  port-forwards already running"; return 0; fi
+  nohup "$ROOT/scripts/portforward.sh" > "$FORWARD_LOG" 2>&1 &
+  sleep 3
+  say "  ${G}ok${N}   agent http://localhost:8000 | grafana http://localhost:3000 | argocd http://localhost:8080"
+}
+
+forward_stop() {
+  "$ROOT/scripts/stop-portforward.sh" 2>&1 | sed 's/^/  /'
+}
+
+# ---- doctor ------------------------------------------------------------------------------------------------------
+FAILS=0
+ok() { say "  ${G}ok${N}   $*"; }
+warn() { say "  ${Y}warn${N} $*"; }
+bad() { say "  ${R}fail${N} $*"; FAILS=$((FAILS + 1)); }
+
+cmd_doctor() {
+  FAILS=0
+  step "tools"
+  for t in docker kind kubectl helm; do command -v "$t" >/dev/null && ok "$t" || bad "$t is not installed"; done
+  command -v kubeseal >/dev/null && ok "kubeseal" || warn "kubeseal is not installed (only needed to seal new secrets: brew install kubeseal)"
+  step "docker"
+  if docker info >/dev/null 2>&1; then
+    ok "Docker is running"
+    local mem
+    mem=$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)
+    if [ "${mem:-0}" -ge 4500000000 ]; then ok "Docker has $(awk -v m="$mem" 'BEGIN { printf "%.1f", m / 1073741824 }') GiB of memory"; else warn "Docker has under 4.5 GiB of memory; the lab needs about 4.8 GiB (Docker Desktop, Settings, Resources)"; fi
+  else
+    bad "Docker is not running"
+  fi
+  step "files that git cannot hold"
+  [ -f "$CONFIG_DIR/argocd-deploy-key" ] && ok "Argo CD deploy key" || bad "missing $CONFIG_DIR/argocd-deploy-key (see GITOPS-PLAN.md)"
+  if [ -f "$CONFIG_DIR/sealed-secrets-key.yaml" ]; then
+    ok "sealing key backup"
+  elif cluster_running; then
+    warn "no sealing key backup yet; lab down will create one from the running cluster"
+  else
+    bad "missing $CONFIG_DIR/sealed-secrets-key.yaml: a rebuild could not decrypt the sealed secrets (see bootstrap/sealed-secrets/regenerate.sh)"
+  fi
+  [ -s "$CONFIG_DIR/ghcr-read-token" ] && ok "image pull token source (only needed to re-seal it)" || warn "no $CONFIG_DIR/ghcr-read-token (only needed if you re-seal the image pull secret)"
+  step "git (Argo CD deploys what is on GitHub main, not what is on this Mac)"
+  if git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+    git -C "$ROOT" fetch -q origin 2>/dev/null
+    local ahead dirty
+    ahead=$(git -C "$ROOT" rev-list --count origin/main..HEAD 2>/dev/null || echo 0)
+    dirty=$(git -C "$ROOT" status --porcelain -- apps platform demo bootstrap 2>/dev/null | wc -l | tr -d ' ')
+    [ "$ahead" = "0" ] && ok "no unpushed commits" || warn "$ahead commit(s) not pushed: the cluster will not see them"
+    [ "$dirty" = "0" ] && ok "no uncommitted changes under apps, platform, demo, bootstrap" || warn "$dirty uncommitted change(s) there: the cluster will not see them"
+  else
+    warn "not a git checkout"
+  fi
+  step "ollama"
+  if ollama_up; then ollama_all_interfaces && ok "running on all interfaces" || warn "running on 127.0.0.1 only; the cluster cannot reach it"; else warn "not running (lab up starts it)"; fi
+  step "cluster"
+  if cluster_running; then ok "$CLUSTER is running"; elif cluster_stopped; then warn "$CLUSTER exists but is paused: lab start"; else say "  $CLUSTER does not exist: lab up"; fi
+  say; [ "$FAILS" -eq 0 ] && say "${G}ready${N}" || say "${R}$FAILS problem(s) to fix first${N}"
+  return "$FAILS"
+}
+
+# ---- commands ----------------------------------------------------------------------------------------------------
+cmd_up() {
+  local forward=1
+  for a in "$@"; do [ "$a" = "--no-forward" ] && forward=0; done
+  step "checking prerequisites"
+  cmd_doctor || { say; say "Fix the failures above, then run lab up again."; return 1; }
+  if cluster_stopped; then
+    step "the cluster is paused, resuming it"
+    cmd_start "$@"
+    return $?
+  fi
+  step "Ollama"
+  ensure_ollama
+  step "building the lab (about 2 to 5 minutes)"
+  "$ROOT/bootstrap/bootstrap.sh" || { say "${R}bootstrap failed${N}; run lab status to see how far it got, or lab doctor"; return 1; }
+  if [ "$forward" -eq 1 ]; then step "port-forwards"; forward_start; fi
+  say
+  say "${G}${B}The lab is up.${N}"
+  say "  agent    http://localhost:8000"
+  say "  grafana  http://localhost:3000   (user admin; password: kubectl --context $CTX -n monitoring get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d)"
+  say "  argocd   http://localhost:8080   (user admin; password: kubectl --context $CTX -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d)"
+}
+
+cmd_down() {
+  local yes=0 ollama=0
+  for a in "$@"; do case "$a" in --yes) yes=1 ;; --stop-ollama) ollama=1 ;; esac; done
+  if ! cluster_exists; then say "Cluster $CLUSTER does not exist. Nothing to do."; return 0; fi
+  say "This will ${R}destroy${N} the cluster ${B}$CLUSTER${N}: every pod, volume and Argo CD app on it."
+  say "Lost for good: the agent's history and alert list, and Prometheus and Loki data."
+  say "Kept (it comes back from git): the platform, the secrets, the agent, the demo workloads."
+  if [ "$yes" -ne 1 ]; then
+    printf 'Type the cluster name (%s) to confirm: ' "$CLUSTER"
+    local answer=""
+    read -r answer
+    [ "$answer" = "$CLUSTER" ] || { say "Not confirmed. Nothing was changed."; return 1; }
+  fi
+  if cluster_running; then
+    step "backing up the sealing key"
+    "$ROOT/bootstrap/sealed-secrets/key.sh" backup || {
+      say "${R}The key backup failed. Not destroying the cluster: without the key a rebuild cannot decrypt the sealed secrets.${N}"; return 1; }
+  else
+    say "  (the cluster is paused, so the key cannot be read from it; the existing backup is kept)"
+    [ -f "$CONFIG_DIR/sealed-secrets-key.yaml" ] || { say "${R}No key backup exists and the cluster is paused. Run lab start, then lab down.${N}"; return 1; }
+  fi
+  step "stopping the port-forwards"; forward_stop
+  step "deleting the cluster"
+  kind delete cluster --name "$CLUSTER" || return 1
+  [ "$ollama" -eq 1 ] && { step "stopping Ollama"; stop_ollama; }
+  say "${G}The lab is down.${N} Bring it back with: lab up"
+}
+
+cmd_stop() {
+  local ollama=0
+  for a in "$@"; do [ "$a" = "--stop-ollama" ] && ollama=1; done
+  cluster_running || { say "The cluster is not running."; return 0; }
+  step "stopping the port-forwards"; forward_stop
+  step "pausing the cluster (nothing is deleted)"
+  docker stop "$CLUSTER-control-plane" "$CLUSTER-worker" >/dev/null && say "  paused"
+  [ "$ollama" -eq 1 ] && { step "stopping Ollama"; stop_ollama; }
+  say "Resume with: lab start"
+}
+
+cmd_start() {
+  local forward=1
+  for a in "$@"; do [ "$a" = "--no-forward" ] && forward=0; done
+  if cluster_running; then
+    say "The cluster is already running; making sure the rest is up too."
+    step "Ollama"; ensure_ollama
+    [ "$forward" -eq 1 ] && { step "port-forwards"; forward_start; }
+    return 0
+  fi
+  cluster_stopped || { say "There is no paused cluster. Use: lab up"; return 1; }
+  step "Ollama"; ensure_ollama
+  step "resuming the cluster"
+  docker start "$CLUSTER-control-plane" "$CLUSTER-worker" >/dev/null
+  wait_for_nodes 300 || { say "${R}the nodes did not become Ready within 5 minutes. Try lab status, or recreate with lab down, lab up${N}"; return 1; }
+  say "  waiting for the apps to settle"
+  for _ in $(seq 1 60); do
+    local bad
+    bad=$(kc -n argocd get applications --no-headers -o custom-columns=H:.status.health.status 2>/dev/null | grep -vc Healthy)
+    [ "$bad" = "0" ] && break; sleep 5
+  done
+  [ "$forward" -eq 1 ] && { step "port-forwards"; forward_start; }
+  say "${G}The lab is running again.${N} (Prometheus and Loki start empty after a pause.)"
+}
+
+cmd_status() {
+  step "cluster $CLUSTER"
+  if cluster_running; then
+    kc get nodes --no-headers 2>/dev/null | awk '{print "  " $1 "  " $2}'
+    step "Argo CD"
+    kc -n argocd get applications -o custom-columns=APP:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status 2>/dev/null | sed 's/^/  /'
+    kc -n argocd get applications -o json 2>/dev/null | python3 -c '
+import json, sys
+for app in json.load(sys.stdin)["items"]:
+    drifted = [r for r in app["status"].get("resources", []) if r.get("status") == "OutOfSync"]
+    if drifted:
+        print("  %s: %d object(s) differ from git" % (app["metadata"]["name"], len(drifted)))
+        for r in drifted:
+            print("    %s %s/%s" % (r["kind"], r.get("namespace", ""), r["name"]))' 2>/dev/null
+    step "agent image"
+    kc -n ai-agent get deploy k8s-agent -o jsonpath='  {.spec.template.spec.containers[0].image}{"\n"}' 2>/dev/null
+  elif cluster_stopped; then
+    say "  paused (lab start to resume)"
+  else
+    say "  does not exist (lab up to create it)"
+  fi
+  step "Ollama"
+  if ollama_up; then ollama_all_interfaces && say "  running on all interfaces" || say "  ${Y}running on 127.0.0.1 only${N}"; else say "  not running"; fi
+  step "port-forwards"
+  forwards_running && say "  running: agent :8000, grafana :3000, argocd :8080" || say "  not running (lab forward start)"
+}
+
+cmd_forward() {
+  case "${1:-status}" in
+    start) cluster_running || { say "The cluster is not running."; return 1; }; forward_start ;;
+    stop) forward_stop ;;
+    status) forwards_running && say "running: agent :8000, grafana :3000, argocd :8080" || say "not running" ;;
+    *) say "usage: lab forward start|stop|status"; return 2 ;;
+  esac
+}
+
+cmd_link() {
+  local dir="${1:-$HOME/.local/bin}"
+  mkdir -p "$dir" && ln -sf "$ROOT/lab" "$dir/lab" || return 1
+  say "linked $dir/lab -> $ROOT/lab"
+  case ":$PATH:" in *":$dir:"*) say "$dir is on your PATH: try  lab status" ;; *) say "add this to your shell profile, then open a new terminal:  export PATH=\"$dir:\$PATH\"" ;; esac
+}
+
+command_name="${1:-help}"
+[ "$#" -gt 0 ] && shift
+case "$command_name" in
+  up) cmd_up "$@" ;;
+  down | destroy) cmd_down "$@" ;;
+  stop) cmd_stop "$@" ;;
+  start) cmd_start "$@" ;;
+  status) cmd_status ;;
+  forward) cmd_forward "$@" ;;
+  doctor) cmd_doctor ;;
+  link) cmd_link "$@" ;;
+  help | -h | --help) usage ;;
+  *) say "lab: unknown command '$command_name'"; say; usage; exit 2 ;;
+esac

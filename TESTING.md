@@ -1174,12 +1174,12 @@ Restart the port-forwards (`./scripts/portforward.sh`) and Ollama.
 
 **Commands to run**
 ```bash
-ls ~/.config/k8s-agent-lab/                          # deploy key and sealing key backup must be there
-./bootstrap/sealed-secrets/key.sh backup             # refresh the backup
-kind delete cluster --name agent-lab
-./bootstrap/bootstrap.sh
-./scripts/gitops-status.sh
+./lab doctor                                         # deploy key, sealing key backup, git state
+./lab down                                           # backs up the sealing key, asks you to type the name, deletes
+./lab up                                             # bootstrap, Ollama, port-forwards
+./lab status                                         # or ./scripts/gitops-status.sh
 ```
+(The same thing by hand: `kind delete cluster --name agent-lab` then `./bootstrap/bootstrap.sh`.)
 
 **Expected faulty behaviour**
 - None; the whole cluster is gone first.

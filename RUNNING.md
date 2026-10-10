@@ -3,6 +3,23 @@
 Everything runs on this Mac: a kind cluster (`agent-lab`), Ollama on the host, and port-forwards to reach the
 services. Nothing is exposed beyond `localhost` except Ollama, which listens on all interfaces (see Safety).
 
+## The `lab` command (the short way)
+
+One command builds, pauses and destroys everything described below. Run it from the repo, or put it on your PATH once with
+`./lab link` and then type `lab` anywhere.
+
+| Command | What it does |
+|---|---|
+| `lab up` | Checks prerequisites, starts one Ollama server if none is running, builds the cluster and everything on it (about 2 to 5 minutes), starts the port-forwards. Safe to re-run; resumes a paused cluster. |
+| `lab down` | Destroys the cluster. Backs up the sealing key first, tells you what is lost, and makes you type the cluster name to confirm (`--yes` skips that). `--stop-ollama` also stops Ollama. |
+| `lab stop` / `lab start` | Pauses and resumes the cluster without deleting anything, so history survives. `start` on a running cluster just makes sure the forwards and Ollama are up. |
+| `lab status` | Nodes, every Argo CD app, drift from git, the agent image, Ollama and the port-forwards. |
+| `lab forward start\|stop\|status` | Only the port-forwards. |
+| `lab doctor` | Checks tools, Docker memory, the two files git cannot hold, unpushed or uncommitted changes, Ollama. Run it before a rebuild. |
+
+`LAB_CLUSTER=<name>` changes the cluster name (default `agent-lab`). `lab` always uses its own cluster's context, so it never
+touches another cluster that `kubectl` happens to point at. The numbered steps below are what `lab` does for you.
+
 ## What is exposed
 
 | Service | URL | How it is exposed | Needed for |

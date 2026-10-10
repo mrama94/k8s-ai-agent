@@ -12,6 +12,7 @@ run() { echo; echo "######## $1"; shift; "$@" || { echo ">>> FAILED: $*"; fail=1
 
 run "unit tests"           bash -c "cd agent && '$PYTHON' -m pytest -q"
 run "lint"                 ./scripts/ci/lint.sh
+run "lab command"          ./scripts/ci/test-lab.sh
 run "no plain secrets"     ./scripts/ci/check-no-plain-secrets.sh
 run "manifests and charts" env PYTHON="$PYTHON" ./scripts/ci/validate-manifests.sh
 

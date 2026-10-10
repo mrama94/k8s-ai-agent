@@ -41,6 +41,7 @@ jobs:
           python-version: "3.12"
       - run: pip install -r agent/requirements-dev.txt
       - run: ./scripts/ci/lint.sh   # shellcheck is preinstalled on the runner
+      - run: ./scripts/ci/test-lab.sh   # the lab command's usage, exit codes and PATH link
 
   manifests:
     name: manifests and Helm charts

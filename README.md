@@ -32,9 +32,11 @@ locally: `PYTHON=<python with the agent requirements> ./scripts/ci/run-all.sh` (
 ## Quick start
 
 ```bash
-./bootstrap/bootstrap.sh                    # cluster, monitoring, agent (safe to re-run)
-OLLAMA_HOST=0.0.0.0:11434 ollama serve      # in its own terminal; run only one Ollama server
-./scripts/portforward.sh                    # agent on :8000, Grafana on :3000
+./lab up          # cluster, Argo CD, monitoring, agent, Ollama and the port-forwards (2 to 5 minutes)
+./lab status      # what is running, and any drift from git
+./lab stop        # pause (history is kept); ./lab start resumes
+./lab down        # destroy (asks first); ./lab up brings it all back
+./lab link        # optional: type `lab` from anywhere
 ```
 
-Then open http://localhost:8000. Teardown: `kind delete cluster --name agent-lab`, stop `ollama serve`.
+Then open http://localhost:8000. `./lab doctor` checks that everything a rebuild needs is in place. Details in RUNNING.md.

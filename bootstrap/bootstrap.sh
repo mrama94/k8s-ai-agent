@@ -14,7 +14,7 @@
 # Usage: ./bootstrap/bootstrap.sh            (safe to re-run; every step is idempotent)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CLUSTER=agent-lab
+CLUSTER="${LAB_CLUSTER:-agent-lab}"   # `lab` passes its cluster name through this
 METRICS_SERVER_VERSION=v0.9.0
 ARGOCD_CHART_VERSION=10.10.2
 

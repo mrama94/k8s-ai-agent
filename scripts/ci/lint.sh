@@ -11,7 +11,7 @@ yamllint -c .yamllint . || fail=1
 
 step "shellcheck"
 # shellcheck disable=SC2046
-shellcheck -S warning $(git ls-files --cached --others --exclude-standard '*.sh') || fail=1
+shellcheck -S warning lab $(git ls-files --cached --others --exclude-standard '*.sh') || fail=1
 
 step "ruff (errors only: E9 syntax, F pyflakes)"
 ruff check --select E9,F agent || fail=1
