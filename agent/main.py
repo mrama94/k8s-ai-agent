@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from langgraph.types import Command
 from pydantic import BaseModel
 
+import outcomes
 from graph import build_graph
 from tools import guards
 
@@ -39,16 +40,19 @@ db.execute(
 )
 db.commit()
 db_lock = threading.Lock()
+outcomes.init(db, db_lock)
 alert_slot = threading.Semaphore(1)  # alert-triggered investigations run one at a time (one local model)
 
 # In-memory job table: graph runs happen in background threads so no HTTP request stays open
 # for minutes (kubectl port-forward drops long connections). The page polls /api/status.
 jobs: dict[str, dict] = {}
+sources: dict[str, str] = {}  # where a chat run came from; alert runs are found in the alerts table
 
 
 class ChatRequest(BaseModel):
     message: str
     conversation_id: str | None = None
+    source: str | None = None  # "eval" marks a scripted evaluation run; anything else is a normal chat
 
 
 class ApprovalRequest(BaseModel):
@@ -95,6 +99,13 @@ def _remember(thread_id: str, values: dict) -> None:
         db.commit()
 
 
+def _log_outcome(thread_id: str, values: dict) -> None:
+    with db_lock:
+        row = db.execute("SELECT alertname FROM alerts WHERE thread_id = ?", (thread_id,)).fetchone()
+    source = "alert" if row else sources.get(thread_id, "chat")
+    outcomes.record(thread_id, values, source=source, alertname=row[0] if row else "")
+
+
 def _snapshot(thread_id: str) -> dict:
     snap = graph.get_state(_config(thread_id))
     values = snap.values
@@ -111,6 +122,7 @@ def _snapshot(thread_id: str) -> dict:
         status = "done"
         if values.get("request"):
             _remember(thread_id, values)
+            _log_outcome(thread_id, values)
     usage = {k: values.get(k, 0) for k in USAGE_KEYS}
     usage["cost_usd"] = 0.0  # local model: nothing to pay
     return {
@@ -249,6 +261,7 @@ def list_alerts():
 def chat(req: ChatRequest):
     thread_id = str(uuid.uuid4())
     conv_id = req.conversation_id or str(uuid.uuid4())
+    sources[thread_id] = "eval" if req.source == "eval" else "chat"
     _start(thread_id, {"request": req.message, "conversation_id": conv_id, "context": _context(conv_id)})
     return {"thread_id": thread_id, "conversation_id": conv_id, "status": "running"}
 
@@ -269,6 +282,12 @@ def status(thread_id: str):
     if not graph.get_state(_config(thread_id)).values and thread_id not in jobs:
         raise HTTPException(status_code=404, detail="Unknown thread.")
     return _snapshot(thread_id)
+
+
+@app.get("/api/outcomes")
+def list_outcomes(limit: int = 50):
+    """What the agent concluded and what happened, newest first, with totals."""
+    return {"stats": outcomes.stats(), "recent": outcomes.recent(max(1, min(limit, 200)))}
 
 
 @app.get("/healthz")

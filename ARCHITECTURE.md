@@ -201,11 +201,28 @@ Prometheus and Loki have no persistent storage here, so their history resets if 
 | Graph state of every run (so it can pause for approval and resume) | SQLite file on a volume in the agent pod | Survives restarts |
 | One short summary per finished turn, for follow-up questions | Same file | The last 5 turns of a conversation are fed to the next message |
 | The alerts list and each alert's run | Same file | Survives restarts |
+| One row per finished run: question, diagnosis, plan, the person's decision, whether it was fixed | Same file (`outcomes` table) | Survives restarts; see [Learning from past runs](#learning-from-past-runs) |
 | Running-job progress | In the agent's memory | Lost on restart (alert runs resume) |
 | Metrics and logs | Prometheus and Loki | 6 hours |
 
 A **conversation** is just a shared id. Each message still runs as its own clean run, with short summaries of earlier
 messages added as background.
+
+## Learning from past runs
+
+The model itself never changes. What grows is a record of what happened, and the agent reads it back.
+
+| Part | What it does |
+|---|---|
+| Outcome log (`agent/outcomes.py`) | Stores a row for every finished run. `GET /api/outcomes` shows the newest rows and totals: how often plans are approved, rejected or empty, and how often an approved plan fixed the problem. |
+| Case memory | Before investigating, and again when writing the plan, the agent looks for similar past runs. It adds up to three as hints: a fix that worked, a plan a person rejected, or a confident diagnosis with nothing to fix. The plan step searches with the diagnosis text, which finds the same kind of fault on a different object. |
+| Evaluation harness (`eval/`) | Breaks the demo namespace in 16 known ways, asks the agent, and scores the diagnosis, the plan and (with `--approve`) the fix. Saved results can be compared, so a change to a prompt, the model or case memory is measured instead of guessed. See [eval/README.md](eval/README.md). |
+
+Safety stays as it was. Past cases are text in a prompt, marked as stored hints and never instructions. A plan built from
+them goes through the same guards, the same preview and the same approval as any other. Nothing the agent learns can
+change a guard, a prompt, RBAC or a runbook. Evaluation runs are tagged and left out of case memory, so the harness
+cannot teach the agent its own answers. Set `CASE_MEMORY=off` on the agent to turn case memory off, for example to
+measure how much it helps.
 
 ## How changes reach the cluster (GitOps)
 

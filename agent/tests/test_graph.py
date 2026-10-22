@@ -350,3 +350,47 @@ def test_the_plan_shows_the_tidied_patch_that_will_really_run(proposing, monkeyp
     assert action["args"]["patch"] == '{"spec": {"selector": {"app": "storefront"}}}'
     assert seen == [{"spec": {"selector": {"app": "storefront"}}}]
     assert action["guard"] == "allowed"
+
+
+# ---- case memory in the prompts -----------------------------------------------------------------------------
+
+def test_similar_cases_reach_the_investigation_and_the_plan(monkeypatch, proposing):
+    briefs = []
+    monkeypatch.setattr(graph.outcomes, "case_text", lambda request: "Similar cases: A fix worked.")
+    monkeypatch.setattr(graph, "_investigate", lambda system, brief: briefs.append(brief) or ("notes", {
+        "tokens_in": 0, "tokens_out": 0, "llm_calls": 0, "llm_seconds": 0.0}))
+    monkeypatch.setattr(graph, "_structured", lambda *a: (None, {"tokens_in": 0, "tokens_out": 0, "llm_calls": 0, "llm_seconds": 0.0}))
+    out = graph.investigate({"request": "fix shop"})
+    assert "Similar cases: A fix worked." in briefs[0] and out["cases"] == "Similar cases: A fix worked."
+    calls = proposing(plan())
+    graph.propose({**STATE, "cases": out["cases"]})
+    assert "Similar cases: A fix worked." in calls[0]
+
+
+def test_without_similar_cases_the_prompts_are_unchanged(monkeypatch, proposing):
+    briefs = []
+    monkeypatch.setattr(graph.outcomes, "case_text", lambda request: "")
+    monkeypatch.setattr(graph, "_investigate", lambda system, brief: briefs.append(brief) or ("notes", {
+        "tokens_in": 0, "tokens_out": 0, "llm_calls": 0, "llm_seconds": 0.0}))
+    monkeypatch.setattr(graph, "_structured", lambda *a: (None, {"tokens_in": 0, "tokens_out": 0, "llm_calls": 0, "llm_seconds": 0.0}))
+    out = graph.investigate({"request": "fix shop"})
+    assert briefs[0] == "fix shop" and out["cases"] == ""
+    calls = proposing(plan())
+    graph.propose(STATE)
+    assert "Similar cases" not in calls[0]
+
+
+def test_the_plan_looks_for_similar_cases_using_the_diagnosis(monkeypatch, proposing):
+    asked = []
+    monkeypatch.setattr(graph.outcomes, "case_text", lambda text: asked.append(text) or "Similar cases: from the diagnosis.")
+    calls = proposing(plan())
+    graph.propose({**STATE, "cases": "Similar cases: from the question."})
+    assert "selector typo" in asked[0] and "fix shop" in asked[0]
+    assert "from the diagnosis" in calls[0] and "from the question" not in calls[0]
+
+
+def test_the_plan_keeps_the_cases_found_earlier_when_the_diagnosis_finds_none(monkeypatch, proposing):
+    monkeypatch.setattr(graph.outcomes, "case_text", lambda text: "")
+    calls = proposing(plan())
+    graph.propose({**STATE, "cases": "Similar cases: from the question."})
+    assert "from the question" in calls[0]

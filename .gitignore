@@ -25,3 +25,4 @@ sealed-secrets-key*.yaml
 
 # Scratch output
 tmp/
+eval/results/

@@ -14,7 +14,7 @@ step "shellcheck"
 shellcheck -S warning lab $(git ls-files --cached --others --exclude-standard '*.sh') || fail=1
 
 step "ruff (errors only: E9 syntax, F pyflakes)"
-ruff check --select E9,F agent || fail=1
+ruff check --select E9,F agent eval || fail=1
 
 [ "$fail" -eq 0 ] && echo "lint clean"
 exit "$fail"

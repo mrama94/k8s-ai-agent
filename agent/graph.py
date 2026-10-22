@@ -13,6 +13,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 
+import outcomes
 from k8s_client import apps, batch, core
 from llm import get_llm
 from tools import guards, patching
@@ -119,6 +120,7 @@ class AgentState(TypedDict, total=False):
     request: str
     conversation_id: str
     context: str
+    cases: str
     findings: str
     diagnosis: dict
     plan: dict
@@ -208,6 +210,9 @@ def _with_context(state: AgentState, text: str) -> str:
 
 def investigate(state: AgentState) -> dict:
     brief = _with_context(state, state["request"])
+    cases = outcomes.case_text(state["request"])
+    if cases:
+        brief += "\n\n" + cases
     if state.get("history"):
         brief += "\n\nEarlier attempts (do not repeat a fix that failed):\n" + "\n".join(state["history"])
     notes, totals = _investigate(INVESTIGATE_PROMPT, brief)
@@ -219,7 +224,7 @@ def investigate(state: AgentState) -> dict:
         diagnosis = {"root_cause": notes[:500], "confidence": "low", "evidence": [], "ruled_out": []}
     else:
         diagnosis = parsed.model_dump()
-    return {"findings": notes, "diagnosis": diagnosis, **totals}
+    return {"findings": notes, "diagnosis": diagnosis, "cases": cases, **totals}
 
 
 def _node_facts() -> str:
@@ -317,12 +322,15 @@ def propose(state: AgentState) -> dict:
         summary = "Confidence is too low to propose a change. Review the evidence and investigate further."
         return {"plan": {"summary": summary, "actions": []}}
     history = "\n".join(state.get("history", [])) or "none"
+    # The diagnosis says far more than the question did, so look for similar cases again with it.
+    cases = outcomes.case_text(f"{state['request']} {diagnosis['root_cause']} {' '.join(diagnosis['evidence'])}") \
+        or state.get("cases", "")
     prompt = (
         _with_context(state, f"Request: {state['request']}") + f"\n\nDiagnosis: {diagnosis['root_cause']}\n"
         f"Evidence: {diagnosis['evidence']}\n\nInvestigation notes:\n{state.get('findings', '')[:3000]}\n\n"
         f"Cluster nodes:\n{_node_facts()}\n\nObjects in the allowed namespaces (copy names from here):\n{_object_facts()}"
         f"\n\nEarlier attempts:\n{history}"
-    )
+    ) + (f"\n\n{cases}" if cases else "")
     parsed, totals = _structured(Plan, PLAN_PROMPT, prompt)
     evidence_text = f"{state['request']} {diagnosis['root_cause']}"
     missing = _missing_args(parsed, evidence_text)
