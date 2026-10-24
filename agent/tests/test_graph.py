@@ -360,6 +360,7 @@ def test_similar_cases_reach_the_investigation_and_the_plan(monkeypatch, proposi
     monkeypatch.setattr(graph, "_investigate", lambda system, brief: briefs.append(brief) or ("notes", {
         "tokens_in": 0, "tokens_out": 0, "llm_calls": 0, "llm_seconds": 0.0}))
     monkeypatch.setattr(graph, "_structured", lambda *a: (None, {"tokens_in": 0, "tokens_out": 0, "llm_calls": 0, "llm_seconds": 0.0}))
+    monkeypatch.setattr(graph, "_object_facts", lambda: "- Service demo/shop")
     out = graph.investigate({"request": "fix shop"})
     assert "Similar cases: A fix worked." in briefs[0] and out["cases"] == "Similar cases: A fix worked."
     calls = proposing(plan())
@@ -373,8 +374,9 @@ def test_without_similar_cases_the_prompts_are_unchanged(monkeypatch, proposing)
     monkeypatch.setattr(graph, "_investigate", lambda system, brief: briefs.append(brief) or ("notes", {
         "tokens_in": 0, "tokens_out": 0, "llm_calls": 0, "llm_seconds": 0.0}))
     monkeypatch.setattr(graph, "_structured", lambda *a: (None, {"tokens_in": 0, "tokens_out": 0, "llm_calls": 0, "llm_seconds": 0.0}))
+    monkeypatch.setattr(graph, "_object_facts", lambda: "- Service demo/shop")
     out = graph.investigate({"request": "fix shop"})
-    assert briefs[0] == "fix shop" and out["cases"] == ""
+    assert briefs[0].startswith("fix shop") and "Similar cases" not in briefs[0] and out["cases"] == ""
     calls = proposing(plan())
     graph.propose(STATE)
     assert "Similar cases" not in calls[0]
@@ -394,3 +396,14 @@ def test_the_plan_keeps_the_cases_found_earlier_when_the_diagnosis_finds_none(mo
     calls = proposing(plan())
     graph.propose({**STATE, "cases": "Similar cases: from the question."})
     assert "from the question" in calls[0]
+
+
+def test_the_investigation_is_given_the_exact_object_names(monkeypatch):
+    briefs = []
+    monkeypatch.setattr(graph.outcomes, "case_text", lambda request: "")
+    monkeypatch.setattr(graph, "_object_facts", lambda: "- CronJob demo/nightly (containers: report)")
+    monkeypatch.setattr(graph, "_investigate", lambda system, brief: briefs.append(brief) or ("notes", {
+        "tokens_in": 0, "tokens_out": 0, "llm_calls": 0, "llm_seconds": 0.0}))
+    monkeypatch.setattr(graph, "_structured", lambda *a: (None, {"tokens_in": 0, "tokens_out": 0, "llm_calls": 0, "llm_seconds": 0.0}))
+    graph.investigate({"request": "the nightly cronjob never runs"})
+    assert "CronJob demo/nightly" in briefs[0] and "exact names" in briefs[0]

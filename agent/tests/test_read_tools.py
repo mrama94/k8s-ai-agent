@@ -138,3 +138,63 @@ def test_the_runbook_search_finds_the_right_guide():
     assert "ImagePullBackOff" in read.search_runbooks.invoke({"query": "ImagePullBackOff"})
     assert "Service has no endpoints" in read.search_runbooks.invoke({"query": "service endpoints"})
     assert read.search_runbooks.invoke({"query": "zzzz qqqq"}) == "No matching runbook."
+
+
+# ---- what the tools show about a container -----------------------------------------------------------------------
+
+def container():
+    from kubernetes import client
+    return client.V1Container(
+        name="web", image="nginx", ports=[client.V1ContainerPort(container_port=80)], command=["sh", "-c"], args=["run"],
+        env=[client.V1EnvVar(name="MODE", value="ok"),
+             client.V1EnvVar(name="DB_PASSWORD", value="hunter2"),
+             client.V1EnvVar(name="FROM_MAP", value_from=client.V1EnvVarSource(
+                 config_map_key_ref=client.V1ConfigMapKeySelector(name="app-config", key="MODE"))),
+             client.V1EnvVar(name="FROM_SECRET", value_from=client.V1EnvVarSource(
+                 secret_key_ref=client.V1SecretKeySelector(name="creds", key="pw")))],
+        readiness_probe=client.V1Probe(http_get=client.V1HTTPGetAction(path="/", port=8081), period_seconds=5),
+        liveness_probe=client.V1Probe(_exec=client.V1ExecAction(command=["cat", "/tmp/ok"])),
+        resources=client.V1ResourceRequirements(limits={"memory": "64Mi"}),
+    )
+
+
+def test_a_container_shows_its_ports_probes_command_and_environment_sources():
+    spec = read.container_spec(container())
+    assert spec["ports"] == [80] and spec["command"] == ["sh", "-c", "run"]
+    assert spec["readiness_probe"]["httpGet"] == {"path": "/", "port": 8081}
+    assert spec["liveness_probe"]["exec"] == ["cat", "/tmp/ok"]
+    assert "FROM_MAP <- configmap app-config/MODE" in spec["env"] and "FROM_SECRET <- secret creds/pw" in spec["env"]
+    assert spec["resources"]["limits"] == {"memory": "64Mi"}
+
+
+def test_secret_looking_values_are_never_shown():
+    spec = read.container_spec(container())
+    assert "DB_PASSWORD=(hidden)" in spec["env"] and "MODE=ok" in spec["env"]
+    assert "hunter2" not in str(spec)
+
+
+def test_a_bare_container_has_only_its_name_and_image():
+    from kubernetes import client
+    assert read.container_spec(client.V1Container(name="a", image="b")) == {"name": "a", "image": "b"}
+
+
+def test_describe_pod_and_get_deployment_include_the_container_settings(fresh_cluster):
+    from kubernetes import client
+    c = container()
+    pod = client.V1Pod(
+        metadata=client.V1ObjectMeta(labels={"app": "x"}), spec=client.V1PodSpec(containers=[c]),
+        status=client.V1PodStatus(phase="Running", conditions=[], container_statuses=[]))
+    fresh_cluster.core.read_namespaced_pod.return_value = pod
+    assert read.container_spec(c)["readiness_probe"]["httpGet"]["port"] == 8081
+    assert "8081" in read.describe_pod.invoke({"namespace": "demo", "name": "p"})
+
+    dep = client.V1Deployment(
+        metadata=client.V1ObjectMeta(uid="u", annotations={}),
+        spec=client.V1DeploymentSpec(
+            replicas=1, selector=client.V1LabelSelector(match_labels={"app": "x"}),
+            strategy=client.V1DeploymentStrategy(type="RollingUpdate"),
+            template=client.V1PodTemplateSpec(spec=client.V1PodSpec(containers=[c]))),
+        status=client.V1DeploymentStatus(conditions=[]))
+    fresh_cluster.apps.read_namespaced_deployment.return_value = dep
+    fresh_cluster.apps.list_namespaced_replica_set.return_value = NS(items=[])
+    assert "8081" in read.get_deployment.invoke({"namespace": "demo", "name": "x"})

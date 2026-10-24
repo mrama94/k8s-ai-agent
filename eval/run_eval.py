@@ -12,6 +12,7 @@ Needs: the agent reachable (./scripts/portforward.sh), kubectl, and the demo nam
   python3 eval/run_eval.py --only A2,G1 --label try
   python3 eval/run_eval.py --approve --label baseline
   python3 eval/run_eval.py --compare eval/baselines/baseline.json eval/results/try.json
+  python3 eval/run_eval.py --merge eval/baselines/baseline.json eval/results/rerun.json
 
 Alert-driven runs can start for the same faults while this runs (the alert rules fire after 1 to 2 minutes). They
 compete for the one local model, so timings are noisy; the scores are not affected.
@@ -31,7 +32,7 @@ ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 
 from scenarios import SCENARIOS  # noqa: E402
-from scoring import allowed_actions, compare, plan_ok, score, summarise  # noqa: E402
+from scoring import allowed_actions, compare, merge, plan_ok, score, summarise  # noqa: E402
 
 
 def call(base: str, path: str, body: dict | None = None) -> dict:
@@ -94,6 +95,7 @@ def run_scenario(sc: dict, args) -> dict:
         result["confidence"] = d.get("confidence", "")
         result["plan"] = [{"tool": a["tool"], **a.get("args", {})} for a in allowed_actions(status.get("plan"))]
         result["runnable_plan"] = runnable
+        result["plan_full"] = status.get("plan")
         if applied is not None:
             result["verification"] = (applied.get("verification") or {}).get("evidence", "")[:500]
     except Exception as exc:  # one broken scenario must not stop the others
@@ -133,11 +135,21 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=900, help="seconds to wait for one run (default %(default)s)")
     ap.add_argument("--list", action="store_true", help="list the scenarios and exit")
     ap.add_argument("--compare", nargs=2, metavar=("OLD", "NEW"), help="compare two saved results and exit")
+    ap.add_argument("--merge", nargs=2, metavar=("OLD", "NEW"),
+                    help="write OLD with the scenarios found in NEW replaced by NEW's results, then exit")
     args = ap.parse_args()
 
     if args.compare:
         old, new = (json.loads(pathlib.Path(p).read_text()) for p in args.compare)
         print("\n".join(compare(old, new)))
+        return 0
+    if args.merge:
+        old_path, new_path = args.merge
+        old, new = (json.loads(pathlib.Path(p).read_text()) for p in (old_path, new_path))
+        ids = ", ".join(r["id"] for r in new["results"])
+        merged = merge(old, new, f"{ids} re-run on {new.get('when', '')} after a scenario or scoring fix.")
+        pathlib.Path(old_path).write_text(json.dumps(merged, indent=2))
+        print(f"updated {old_path}: {ids} replaced; now {merged['summary']['passed']}/{merged['summary']['scenarios']} pass")
         return 0
     chosen = [s for s in SCENARIOS if not args.only or s["id"] in args.only.split(",")]
     if args.list:

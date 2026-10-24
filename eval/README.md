@@ -42,6 +42,24 @@ python3 eval/run_eval.py --compare eval/baselines/baseline.json eval/results/try
 
 It lists the scenarios that improved or regressed.
 
+## Fixing a scenario or its scoring
+
+If a scenario turns out to be wrong (a leftover fault, an expectation that was too strict), fix it, re-run only that
+scenario, and fold the new result into the saved baseline instead of repeating the whole set:
+
+```bash
+python3 eval/run_eval.py --approve --only A3 --label rerun
+python3 eval/run_eval.py --merge eval/baselines/baseline.json eval/results/rerun.json
+```
+
+Do this before changing the agent, so the baseline still describes the agent it was measured on.
+
+## Do not tune to the test
+
+Prompt and tool changes made after reading these scenarios will naturally help these scenarios. A rise in the score is
+real only if it also holds on cases the changes were not written for. Add a few new scenarios and keep them out of
+your tuning, then run them as a check.
+
 ## Measuring case memory
 
 1. Run with case memory off (set `CASE_MEMORY` to `off` on the agent Deployment) and label the result `memory-off`.

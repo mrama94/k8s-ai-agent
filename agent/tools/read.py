@@ -36,6 +36,53 @@ def _state(state) -> dict:
     return {}
 
 
+SECRET_LOOKING = re.compile(r"pass|secret|token|key|credential|auth", re.I)
+
+
+def _env(container) -> list[str]:
+    """Environment variables as `NAME=value` or `NAME <- where it comes from`. Values of secret-looking names are hidden."""
+    out = []
+    for e in container.env or []:
+        src = e.value_from
+        if src is None:
+            out.append(f"{e.name}=" + ("(hidden)" if SECRET_LOOKING.search(e.name) else str(e.value)[:80]))
+        elif src.config_map_key_ref:
+            out.append(f"{e.name} <- configmap {src.config_map_key_ref.name}/{src.config_map_key_ref.key}")
+        elif src.secret_key_ref:
+            out.append(f"{e.name} <- secret {src.secret_key_ref.name}/{src.secret_key_ref.key}")
+        else:
+            out.append(f"{e.name} <- another source")
+    return out[:15]
+
+
+def _probe(probe) -> dict | None:
+    if probe is None:
+        return None
+    if probe.http_get:
+        what = {"httpGet": {"path": probe.http_get.path, "port": probe.http_get.port}}
+    elif probe.tcp_socket:
+        what = {"tcpSocket": {"port": probe.tcp_socket.port}}
+    elif getattr(probe, "_exec", None):
+        what = {"exec": probe._exec.command}
+    else:
+        what = {}
+    return {**what, "period": probe.period_seconds, "failures": probe.failure_threshold}
+
+
+def container_spec(c) -> dict:
+    """What a container is told to run and how it is checked: the facts needed to spot a wrong port, probe or variable."""
+    spec = {
+        "name": c.name, "image": c.image,
+        "ports": [p.container_port for p in (c.ports or [])],
+        "command": ((c.command or []) + (c.args or []))[:6] or None,
+        "env": _env(c) or None,
+        "readiness_probe": _probe(c.readiness_probe),
+        "liveness_probe": _probe(c.liveness_probe),
+        "resources": c.resources.to_dict() if c.resources else None,
+    }
+    return {k: v for k, v in spec.items() if v not in (None, [], {})}
+
+
 @tool
 def list_nodes() -> str:
     """List cluster nodes with their Ready status, labels and taints."""
@@ -69,10 +116,10 @@ def list_pods(namespace: str = "default") -> str:
 
 @tool
 def describe_pod(namespace: str, name: str) -> str:
-    """Show a pod's labels, owner, nodeSelector, tolerations, resources, conditions and container states, including the last termination reason."""
+    """Show a pod's labels, owner, nodeSelector, tolerations, conditions, each container's settings (ports, command, environment, probes, resources) and its state, including the last termination reason."""
     p = core.read_namespaced_pod(name, namespace)
-    limits = {c.name: c.resources.to_dict() for c in p.spec.containers}
     return _j({
+        "spec": [container_spec(c) for c in p.spec.containers],
         "name": name,
         "phase": p.status.phase,
         "labels": p.metadata.labels,
@@ -87,7 +134,6 @@ def describe_pod(namespace: str, name: str) -> str:
             {
                 "name": s.name, "image": s.image, "ready": s.ready, "restarts": s.restart_count,
                 "state": _state(s.state), "last_state": _state(s.last_state),
-                "resources": limits.get(s.name),
             }
             for s in (p.status.container_statuses or [])
         ],
@@ -129,7 +175,7 @@ def get_namespace_events(namespace: str) -> str:
 
 @tool
 def get_deployment(namespace: str, name: str) -> str:
-    """Show a Deployment's replica counts, images, conditions and rollout history (revisions with their images)."""
+    """Show a Deployment's replica counts, containers (image, ports, command, environment, probes, resources), conditions and rollout history (revisions with their images)."""
     d = apps.read_namespaced_deployment(name, namespace)
     owned = [
         rs for rs in apps.list_namespaced_replica_set(namespace).items
@@ -155,7 +201,7 @@ def get_deployment(namespace: str, name: str) -> str:
         "available": d.status.available_replicas or 0,
         "strategy": d.spec.strategy.type,
         "selector": d.spec.selector.match_labels,
-        "images": [c.image for c in d.spec.template.spec.containers],
+        "containers": [container_spec(c) for c in d.spec.template.spec.containers],
         "current_revision": d.metadata.annotations.get(REVISION),
         "conditions": [
             {"type": c.type, "status": c.status, "reason": c.reason, "message": c.message}
