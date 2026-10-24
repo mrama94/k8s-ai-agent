@@ -86,7 +86,10 @@ def run_scenario(sc: dict, args) -> dict:
         if status["status"] == "awaiting_approval":
             go = args.approve and plan_ok(status.get("plan"), sc["expect"]["plan"])
             call(args.agent, "/api/approve", {"thread_id": thread_id, "approved": bool(go)})
-            after = poll(args.agent, thread_id, {"done", "error"}, args.timeout)
+            after = poll(args.agent, thread_id, {"done", "error", "awaiting_approval"}, args.timeout)
+            if after["status"] == "awaiting_approval":  # the first fix did not heal the cluster; a second plan is waiting
+                call(args.agent, "/api/approve", {"thread_id": thread_id, "approved": False})
+                after = poll(args.agent, thread_id, {"done", "error"}, args.timeout)
             if go and after["status"] == "done":
                 applied = after
         result.update(score(status, sc["expect"], applied))

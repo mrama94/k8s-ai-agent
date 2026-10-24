@@ -139,3 +139,10 @@ def test_a_patch_with_a_stray_brace_and_its_own_name_passes_the_guard():
                                        "patch": '{"metadata": {"name": "shop"}, "spec": {"selector": {"app": "shop"}}}}'})
     blocked("labels and annotations", tool="patch_resource", args={"kind": "Service", "namespace": "demo", "name": "shop",
                                                                   "patch": '{"metadata": {"name": "other"}, "spec": {"x": 1}}'})
+
+
+def test_rolling_back_something_that_is_not_a_deployment_is_refused_plainly(fresh_cluster):
+    from kubernetes import client
+    fresh_cluster.apps.read_namespaced_deployment.side_effect = client.ApiException(status=404, reason="Not Found")
+    with pytest.raises(guards.GuardError, match="is not a Deployment"):
+        guards.check({"tool": "rollback_deployment", "args": {"namespace": "demo", "name": "store"}})

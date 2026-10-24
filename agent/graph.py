@@ -89,8 +89,10 @@ Common fixes:
   wrong value: patch_resource on the ConfigMap first, then restart_deployment on the workload that reads it.
 - A StatefulSet does not replace a pod that never became ready. After patching its bad image, also delete_pod that
   stuck pod so it restarts with the fix.
-- Set only values that appear in the diagnosis, the evidence or the object list. If the correct value is not there,
-  return an empty actions list instead of guessing a port, path, image tag or limit.
+- Never invent a port, path, command or image tag that the diagnosis and evidence do not support. If the correct value
+  is not known, return an empty actions list. A resource limit is the exception: raise it with clear headroom, at least
+  double what the process was seen to use.
+- rollback_deployment works only on a Deployment. For a StatefulSet or DaemonSet use patch_resource.
 Only propose an action that directly fixes the diagnosed cause. These causes have NO fix among the actions, so
 return an empty actions list for them: anything about Secrets, Ingresses, PersistentVolumeClaims or RBAC, missing
 registry credentials, not enough cluster capacity, a cause that lives in application code or an external system
@@ -332,6 +334,31 @@ def _infer_name(action, text: str) -> None:
         a.name = names[0]
 
 
+INVALID_JSON = "not valid JSON"
+
+
+def _vet(parsed) -> dict:
+    """Turn the model's plan into the stored one: each action gets its guard verdict, and each patch is tidied and
+    previewed with a dry run, so the human sees exactly what would change before deciding."""
+    if parsed is None:
+        return {"summary": "The model did not return a valid plan.", "actions": []}
+    plan = parsed.model_dump(exclude_none=True)
+    plan["actions"] = plan["actions"][: guards.MAX_ACTIONS]
+    for action in plan["actions"]:
+        try:
+            guards.check(action)
+            action["guard"] = "allowed"
+            if action["tool"] == "patch_resource":
+                args = action["args"]
+                clean = patching.parse_patch(args.get("patch"), (args["kind"], args["namespace"], args["name"]))
+                args["patch"] = json.dumps(clean)  # show and apply the validated, tidied patch, not the model's raw text
+                action["preview"] = patching.preview(args["kind"], args["namespace"], args["name"], clean)
+        except Exception as exc:
+            action["guard"] = f"blocked: {exc}"
+            action.pop("preview", None)
+    return plan
+
+
 def propose(state: AgentState) -> dict:
     diagnosis = state["diagnosis"]
     if diagnosis["confidence"] == "low":
@@ -359,23 +386,19 @@ def propose(state: AgentState) -> dict:
         _merge(totals, extra)
         parsed = again or parsed
         _missing_args(parsed, evidence_text)  # apply the defaults to the new plan too
-    if parsed is None:
-        plan = {"summary": "The model did not return a valid plan.", "actions": []}
-    else:
-        plan = parsed.model_dump(exclude_none=True)
-        plan["actions"] = plan["actions"][: guards.MAX_ACTIONS]
-        for action in plan["actions"]:  # show the guard verdict before the human decides
-            try:
-                guards.check(action)
-                action["guard"] = "allowed"
-                if action["tool"] == "patch_resource":  # show exactly what would change before the human decides
-                    args = action["args"]
-                    clean = patching.parse_patch(args.get("patch"), (args["kind"], args["namespace"], args["name"]))
-                    args["patch"] = json.dumps(clean)  # show and apply the validated, tidied patch, not the model's raw text
-                    action["preview"] = patching.preview(args["kind"], args["namespace"], args["name"], clean)
-            except Exception as exc:
-                action["guard"] = f"blocked: {exc}"
-                action.pop("preview", None)
+    plan = _vet(parsed)
+    broken = [a["guard"] for a in plan["actions"] if INVALID_JSON in a.get("guard", "")]
+    if broken:  # a small model often drops a closing brace: show it the error once and ask for the same plan again
+        again, extra = _structured(
+            Plan, PLAN_PROMPT,
+            prompt + f"\n\nYour previous plan was rejected: {broken[0][:300]}. Return the whole plan again, with the "
+            "patch written as valid JSON (every brace and bracket closed).",
+        )
+        _merge(totals, extra)
+        _missing_args(again, evidence_text)
+        retry = _vet(again)
+        if again is not None and not any(INVALID_JSON in a.get("guard", "") for a in retry["actions"]):
+            plan = retry
     return {"plan": plan, **totals}
 
 

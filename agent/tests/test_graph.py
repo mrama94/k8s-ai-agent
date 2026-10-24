@@ -407,3 +407,36 @@ def test_the_investigation_is_given_the_exact_object_names(monkeypatch):
     monkeypatch.setattr(graph, "_structured", lambda *a: (None, {"tokens_in": 0, "tokens_out": 0, "llm_calls": 0, "llm_seconds": 0.0}))
     graph.investigate({"request": "the nightly cronjob never runs"})
     assert "CronJob demo/nightly" in briefs[0] and "exact names" in briefs[0]
+
+
+BAD_JSON = Plan(summary="s", actions=[act("patch_resource", kind="Deployment", name="web", patch='{"spec": {')])
+GOOD_JSON = Plan(summary="s", actions=[act("patch_resource", kind="Deployment", name="web", patch='{"spec": {"replicas": 2}}')])
+
+
+def test_a_patch_that_is_not_valid_json_is_sent_back_to_the_model_once(monkeypatch, proposing):
+    monkeypatch.setattr(graph.patching, "preview", lambda *a: ["spec.replicas: 1 -> 2"])
+    monkeypatch.setattr(graph.guards, "check", lambda a: graph.patching.parse_patch(a["args"]["patch"]) and None)
+    calls = proposing(BAD_JSON, GOOD_JSON)
+    out = graph.propose(STATE)
+    assert len(calls) == 2 and "not valid JSON" in calls[1] and "every brace and bracket closed" in calls[1]
+    assert [a["guard"] for a in out["plan"]["actions"]] == ["allowed"]
+
+
+def test_if_the_second_try_is_still_broken_the_first_verdict_stays(monkeypatch, proposing):
+    monkeypatch.setattr(graph.guards, "check", lambda a: graph.patching.parse_patch(a["args"]["patch"]) and None)
+    calls = proposing(BAD_JSON, BAD_JSON)
+    out = graph.propose(STATE)
+    assert len(calls) == 2 and out["plan"]["actions"][0]["guard"].startswith("blocked:")
+
+
+def test_a_valid_plan_is_never_asked_for_twice(monkeypatch, proposing):
+    monkeypatch.setattr(graph.patching, "preview", lambda *a: ["x"])
+    monkeypatch.setattr(graph.guards, "check", lambda a: None)
+    calls = proposing(GOOD_JSON)
+    graph.propose(STATE)
+    assert len(calls) == 1
+
+
+def test_the_plan_prompt_limits_rollback_to_deployments_and_does_not_cap_limits_at_the_observed_value():
+    assert "rollback_deployment works only on a Deployment" in graph.PLAN_PROMPT
+    assert "headroom" in graph.PLAN_PROMPT

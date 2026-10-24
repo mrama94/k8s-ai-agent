@@ -41,7 +41,10 @@ def check(action: dict) -> None:
         ):
             raise GuardError(f"no pod in the allowed namespaces has nodeSelector {wanted[0]}={wanted[1]}")
     if tool == "rollback_deployment":
-        dep = apps.read_namespaced_deployment(args.get("name", ""), args["namespace"])
+        try:
+            dep = apps.read_namespaced_deployment(args.get("name", ""), args["namespace"])
+        except client.ApiException:
+            raise GuardError(f"'{args.get('name')}' is not a Deployment in {args['namespace']}; rollback works only on Deployments")
         revision = "deployment.kubernetes.io/revision"
         current = int(dep.metadata.annotations.get(revision, "0"))
         earlier = [
